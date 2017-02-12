@@ -2,7 +2,8 @@
 
 main(){
 	local l_starttime=$(date +%s)
-	init_vars
+	# init_vars
+	# should be replaced by f_init_from_ini
 	f_init_from_ini
 	log_always "$_scriptlocal $LINENO +++++++++++++++++++++++++++ Start of processing"
 	if [ -e $_base/lock ]; then
@@ -24,7 +25,7 @@ main(){
 		l_timestamp=$(f_get_timestamp_rounded_5)
 		f_create_DB $g_database $g_table
 		# implement later on
-		f_do_housekeeping $g_database $g_table $l_timestamp
+		# f_do_housekeeping $g_database $g_table $l_timestamp
 		
 		# only for testing - otherwise called by housekeeping
 		# echo date $(date +%u)
@@ -33,12 +34,13 @@ main(){
 		
 		# use "1" for random numbers - if no sensors available
 		# f_get_sensordata $g_database $l_timestamp 1
-		f_get_sensordata $g_database $l_timestamp 
+		f_get_position $g_database $l_timestamp 
+		# exit
 		# f_do_jsondata_month $g_database $g_table TempA TempWW RoomTemp1 TempKist
-		f_do_jsondata_week $g_database $g_table TempA RoomTemp1 BrennerSekunden1 BrennerSekunden2
-		f_do_jsondata_day $g_database $g_table TempA TempWW RoomTemp1 TempKist BrennerSekunden1 BrennerSekunden2
-		f_do_transfer
-		f_do_control_heating $g_database $g_table $l_timestamp
+		# f_do_jsondata_week $g_database $g_table TempA RoomTemp1 BrennerSekunden1 BrennerSekunden2
+		# f_do_jsondata_day $g_database $g_table TempA TempWW RoomTemp1 TempKist BrennerSekunden1 BrennerSekunden2
+		# f_do_transfer
+		# f_do_control_heating $g_database $g_table $l_timestamp
 		rm lock
 		log_info "$_scriptlocal $LINENO removed lock"
 	fi

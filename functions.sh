@@ -48,8 +48,15 @@ local l_own_path=$(dirname $l_own_name)
 local l_current_dir=$(pwd)
 cd "$l_own_path"
 
+declare -r -g g_logfile=$l_own_path/logfile.log
+
 local l_inifile="$l_own_name_wo"".ini"
-log_info "$FUNCNAME $LINENO using ini file $l_inifile for initialization"
+if [[ ! -f "$l_inifile" ]]; then
+	echo "$FUNCNAME $LINENO ini file $l_inifile not found"|tee -a $g_logfile
+	return 1
+else
+	echo "$FUNCNAME $LINENO using ini file $l_inifile for initialization"|tee -a $g_logfile
+fi
 
 if [[ ! -d "$l_own_path/data" ]]; then
 	log_info "$FUNCNAME $LINENO create data directory $l_own_path/data"
@@ -73,28 +80,9 @@ log_debug "$FUNCNAME $LINENO initialized g_subdomain with $g_subdomain"
 declare -r -g g_mail_rcpt=$(grep "^g_mail_rcpt" "$l_inifile"|cut -d= -f2)
 log_debug "$FUNCNAME $LINENO initialized g_mail_rcpt with \"$g_mail_rcpt\""
 
-declare -r -g g_vclient_cmd=$(grep "^g_vclient_cmd" "$l_inifile"|cut -d= -f2)
-log_debug "$FUNCNAME $LINENO initialized g_vclient_cmd with \"$g_vclient_cmd\""
+declare -r -g g_object=$(grep "^g_object" "$l_inifile"|cut -d= -f2)
+log_debug "$FUNCNAME $LINENO initialized g_object with \"$g_object\""
 
-declare -r -g g_ip_livingroom=$(grep "^g_ip_livingroom" "$l_inifile"|cut -d= -f2)
-log_debug "$FUNCNAME $LINENO initialized g_ip_livingroom with \"$g_ip_livingroom\""
-
-declare -r -g g_wintermode=$(grep "^g_wintermode" "$l_inifile"|cut -d= -f2)
-log_debug "$FUNCNAME $LINENO initialized g_wintermode with \"$g_wintermode\""
-
-declare -r -g g_livingroom_target=$(grep "^g_livingroom_target" "$l_inifile"|cut -d= -f2)
-log_debug "$FUNCNAME $LINENO initialized g_livingroom_target with \"$g_livingroom_target\""
-
-declare -r -g g_livingroom_reduced=$(grep "^g_livingroom_reduced" "$l_inifile"|cut -d= -f2)
-log_debug "$FUNCNAME $LINENO initialized g_livingroom_reduced with \"$g_livingroom_reduced\""
-
-declare -r -g g_hysteresis=$(grep "^g_hysteresis" "$l_inifile"|cut -d= -f2)
-log_debug "$FUNCNAME $LINENO initialized g_hysteresis with \"$g_hysteresis\""
-
-
-# ATTENTION: this is not implemented yet as ini file parameter; need to test this first
-declare -r -g -a g_livingroom_from=( [1]='05:00' [2]='09:30' [3]='09:30' [4]='05:00' [5]='05:00' [6]='05:00' [7]='05:00' )
-declare -r -g -a   g_livingroom_to=( [1]='19:00' [2]='19:00' [3]='19:00' [4]='19:00' [5]='20:00' [6]='20:00' [7]='19:00' )
 }
 
 function init_vars()
@@ -1108,20 +1096,10 @@ local l_today=$(date +%Y%m%d)
 local l_today_00=$(date -d "$l_today" +%s)
 
 if [[ ! -e "$i_db" ]]; then
-	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY,TempA REAL,TempAg REAL, TempAbg REAL, PumpeStatusSp INT, TempWWsoll REAL, TempWW REAL, TempWWmin REAL, TempKsoll REAL, TempKist REAL, RoomTemp1 REAL, BrennerStatus1 INT, BrennerStatus2 INT, BrennerStarts INT, BrennerSekunden1 INT, BrennerSekunden2 INT, Oil INT, Slope1 REAL, Level1 INT, EcoMode1 INT, GenOpMode1 INT, HeatPump1 INT, IntPump INT, test_flag INTEGER);"
-	# sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY,zone1 REAL,zone2 REAL,zone3 REAL,air REAL,device REAL,test_flag INTEGER);"
-	log_info "$FUNCNAME $LINENO DB $i_db created with table $i_table - now initializing DB"
-	local l_current_time=$(f_get_timestamp_rounded_5)
-	# 15724800 secondes = 182 days
-	local l_6m_ago=$(( $l_today_00 - 15724800 ))
-	local l_time=$l_6m_ago
-	while (( $l_time < $l_current_time )); do
-		sql_string=$l_time,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
-		log_debug "$FUNCNAME $LINENO sqlite3 insert into $i_table values $sql_string"
-		eval "sqlite3 $i_db \"insert into $i_table values($sql_string);\" | tee -a $logfile 2>&1"
-		l_time=$(( $l_time + 900 ))
-	done
-	log_info "$FUNCNAME $LINENO DB $i_db initialized"
+	# object - text description for object to be tracked
+	# 
+	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
+	log_info "$FUNCNAME $LINENO DB $i_db initialized and table $i_table created"
 else
 	log_info "$FUNCNAME $LINENO DB $i_db already exists"
 fi
@@ -1156,53 +1134,15 @@ local m=$((100+5*(${5#0}/5)))
 echo $(date --date "$1$2$3 $4:${m#1}" +%s)
 }
 
-function f_get_value_from_heating()
-{
-# this function retrieves the value from the Viessmann Heating
-# it also does some sanity checks
-# silent function - returns value on stdout
-# returns return code 0 if retrieval was ok
-# returns return code 128 if no valid value was retrieved
-# input parameter 1: -c command accepted by vclient, e.g. "getIntPump"
-# input parameter 2: known invalid return value, e.g. "128.500000" for "getTempA"; function will try again, if invalid value was retrieved
-# input parameter 3: unixtime - will be used to retrieve value from db in case the sensor does not deliver value
-local -r i_command="$1"
-local -r i_invalid="$2"
-local -r i_unixtime="$3"
-
-local m_value=$($g_vclient_cmd -h 127.0.0.1:3002 -c $i_command | tail -n 1 |cut -d' ' -f1)
-
-local i=0
-while [ "$m_value" == "$i_invalid" -a $i -lt 4 ]
-do
-	log_error_silent "$FUNCNAME $LINENO attempt $i illegal value $m_value for $i_command"
-	m_value=$($g_vclient_cmd -h 127.0.0.1:3002 -c $i_command | tail -n 1 |cut -d' ' -f1)
-	((i++))
-done
-
-if [ "$m_value" = "$i_invalid" ]; then
-	m_value=0
-	echo "$m_value"
-	return 128
-else
-	echo "$m_value"
-	return 0
-fi
-}
-
-
-
-function f_get_sensordata(){
+function f_get_position(){
 log_info "$FUNCNAME $LINENO start"
 local -r -i l_runtime=$SECONDS
-# function to retrieve temperatures from sensors and store them into specified DB
+# function to retrieve position from GPS device
 # input parameter 1: sqlite3 database file
 # input parameter 2: unixtime - so that all functions will use the same reference time independent of runtime of certain functions
-# input parameter 3: if = 1 will not use temp sensors, but random numbers
-# 
+
 local -r i_db="$1"
 local -r i_unixtime="$2"
-local -r i_random="$3"
 
 if [[ "$i_db" = "" ]]; then
 	log_error "$FUNCNAME $LINENO no database specified"
@@ -1218,94 +1158,19 @@ else
 	log_debug "$FUNCNAME $LINENO using timestamp $(date -d @$i_unixtime)"
 fi
 
-if [[ "$i_random" = "1" ]]; then
-	log_warning "$FUNCNAME $LINENO no real temp sensors used - using random numbers instead"
-fi
+local gpsdata=$( gpspipe -w | grep -m 1 TPV )
+local latitude_n=$( echo "$gpsdata"  | jq '.lat' )
+local longitude_e=$( echo "$gpsdata"  | jq '.lon' )
+local elevation=$( echo "$gpsdata"  | jq '.alt' )
+local gpstime=$( echo "$gpsdata" | jq '.time' )
+log_info "$FUNCNAME $LINENO position $latitude_n $longitude_e at elevation $elevation with time $gpstime"
+log_debug "$FUNCNAME $LINENO raw data $gpsdata"
 
-m_TempA=$(f_get_value_from_heating getTempA 128.500000 |awk '{printf "%1.1f", $0}')
-if [ "$?" = "128" ]; then
-	m_TempA=$(f_get_single_value $g_database $g_table $TempA $(( $i_unixtime - 300 )))
-	log_error "$FUNCNAME $LINENO got crazy value but will use DB value $m_TempA"
-fi
-log_info "$FUNCNAME $LINENO got value $m_TempA for m_TempA"
-m_TempAg=$(f_get_value_from_heating getTempAg)
-log_info "$FUNCNAME $LINENO got value $m_TempAg for m_TempAg"
-m_TempAbg=$(f_get_value_from_heating getTempAbg 128.500000)
-log_info "$FUNCNAME $LINENO got value $m_TempAbg for m_TempAbg"
-m_PumpeStatusSp=$(f_get_value_from_heating getCylPriPump)
-log_info "$FUNCNAME $LINENO got value $m_PumpeStatusSp for m_PumpeStatusSp"
-m_TempWWsoll=$(f_get_value_from_heating getTempWWsoll)
-log_info "$FUNCNAME $LINENO got value $m_TempWWsoll for m_TempWWsoll"
-m_TempWW=$(f_get_value_from_heating getTempWW 128.500000 |awk '{printf "%1.1f", $0}')
-log_info "$FUNCNAME $LINENO got value $m_TempWW for m_TempWW"
-m_TempWWmin=$(f_get_value_from_heating getTempWWmin)
-log_info "$FUNCNAME $LINENO got value $m_TempWWmin for m_TempWWmin"
-m_TempKist=$(f_get_value_from_heating getTempKist |awk '{printf "%1.1f", $0}')
-log_info "$FUNCNAME $LINENO got value $m_TempKist for m_TempKist"
-
-# TempKsoll currently not working
-# TempKsoll=$($vclient_cmd -h 127.0.0.1:3002 -c  getTempKsoll | tail -n 1 |cut -d' ' -f1)
-m_TempKsoll=0
-
-m_BrennerStatus1=$(f_get_value_from_heating getBrennerStatus1 NOT)
-log_info "$FUNCNAME $LINENO got value $m_BrennerStatus1 for m_BrennerStatus1"
-m_BrennerStatus2=$(f_get_value_from_heating getBrennerStatus2)
-log_info "$FUNCNAME $LINENO got value $m_BrennerStatus2 for m_BrennerStatus2"
-m_BrennerStarts=$(f_get_value_from_heating getBrennerStarts)
-log_info "$FUNCNAME $LINENO got value $m_BrennerStarts for m_BrennerStarts"
-m_BrennerSekunden1=$(f_get_value_from_heating getBrennerSekunden1 84215048.000000)
-log_info "$FUNCNAME $LINENO got value $m_BrennerSekunden1 for m_BrennerSekunden1"
-m_BrennerSekunden2=$(f_get_value_from_heating getBrennerSekunden2 84215048.000000)
-log_info "$FUNCNAME $LINENO got value $m_BrennerSekunden2 for m_BrennerSekunden2"
-m_Oil=$(f_get_value_from_heating getOil 84215048.000000)
-log_info "$FUNCNAME $LINENO got value $m_Oil for m_Oil"
-m_Slope1=$(f_get_value_from_heating getSlope1)
-log_info "$FUNCNAME $LINENO got value $m_Slope1 for m_Slope1"
-m_Level1=$(f_get_value_from_heating getLevel1)
-log_info "$FUNCNAME $LINENO got value $m_Level1 for m_Level1"
-m_EcoMode1=$(f_get_value_from_heating getEcoMode1)
-log_info "$FUNCNAME $LINENO got value $m_EcoMode1 for m_EcoMode1"
-m_GenOpMode1=$(f_get_value_from_heating getGenOpMode1|awk '{printf "%1.0f", $0}')
-log_info "$FUNCNAME $LINENO got value $m_GenOpMode1 for m_GenOpMode1"
-m_HeatPump1=$(f_get_value_from_heating getHeatPump1)
-log_info "$FUNCNAME $LINENO got value $m_HeatPump1 for m_HeatPump1"
-m_IntPump=$(f_get_value_from_heating getIntPump NOT)
-log_info "$FUNCNAME $LINENO got value $m_IntPump for m_IntPump"
-
-# doing remote read of room temp
-m_RoomTemp1=$(ssh pi@$g_ip_livingroom "grep t= /sys/bus/w1/devices/28-000005ceb15d/w1_slave|cut -d= -f2")
-if [ "x$m_RoomTemp1" == "x" ]; then 
-	log_error "$FUNCNAME $LINENO no RoomTemp1 - sensor / Raspi offline"
-	m_RoomTemp1=0
-else
-	m_RoomTemp1=$(echo "scale=1; $m_RoomTemp1 / 1000" | bc)
-	log_info "$FUNCNAME $LINENO Temperature in Room is $m_RoomTemp1"
-fi
-
-log_info "$FUNCNAME $LINENO $timestamp_real AussenTemp $m_TempA, AussenTemp gedämpft $m_TempAg, AbgasTemp $m_TempAbg, Speicherladepumpe $m_PumpeStatusSp, Warmwasser Soll $m_TempWWsoll, Warmwasser Ist $m_TempWW, Warmwasser Min $m_TempWWmin, Kessel Soll $m_TempKsoll, Kessel Ist $m_TempKist, Wohnzimmer $m_RoomTemp1, Brennerstufe1 $m_BrennerStatus1, Brennerstufe2 $m_BrennerStatus2, Brenner Starts $m_BrennerStarts, Brennersekunden1 $m_BrennerSekunden1, BrennerSekunden2 $m_BrennerSekunden2, Ölzähler $m_Oil, Steigung $m_Slope1, Niveau $m_Level1, EcoMode $m_EcoMode1, Interne Pumpe $m_IntPump, Pumpe HK1 $m_HeatPump1"
-
-sql_string="$i_unixtime,$m_TempA,$m_TempAg,$m_TempAbg,$m_PumpeStatusSp,$m_TempWWsoll,$m_TempWW,$m_TempWWmin,$m_TempKsoll,$m_TempKist,$m_RoomTemp1,$m_BrennerStatus1,$m_BrennerStatus2,$m_BrennerStarts,$m_BrennerSekunden1,$m_BrennerSekunden2,$m_Oil,$m_Slope1,$m_Level1,$m_EcoMode1,$m_GenOpMode1,$m_HeatPump1,$m_IntPump,0"
+sql_string="$i_unixtime,'$g_object',$longitude_e,$latitude_n,$elevation,'$gpstime'"
 
 log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into $g_table values $sql_string"
-# echo "sqlite3 $i_db \"insert into $i_table values($sql_string);\"" >>$redo_logfile_sql
 	
 eval "sqlite3 $i_db \"insert into $g_table values($sql_string);\""
-
-# return 0
-# device=$(echo "scale=1; $(cat $device_sens) / 1000" | bc)
-# log_info "$FUNCNAME $LINENO device sensor $device_sens showed $device"
-
-# sql_string=$timestamp_rounded_unix,$zone1,$zone2,$zone3,$air,$device,0
-# log_info "$FUNCNAME $LINENO sqlite3 insert into rawdata_bee1 values $sql_string"
-# eval "sqlite3 $i_db \"insert into rawdata_bee1 values($sql_string);\" | tee -a $logfile 2>&1"
-
-log_info "$FUNCNAME $LINENO create html pages with current sensordata"
-local l_helper=$(date -d @$i_unixtime +"%d.%m. %H:%M")
-f_create_html_header "data/week_pos0.html" "$l_helper"
-f_create_html_temp "data/week_pos1.html" "$m_TempA" "$(f_get_min_day_value $i_db $g_table TempA $i_unixtime)" "$(f_get_avg_day_value $i_db $g_table TempA $i_unixtime)" "$(f_get_max_day_value $i_db $g_table TempA $i_unixtime)" "Aussen [°C]"
-f_create_html_temp "data/week_pos2.html" "$m_TempWW" "$(f_get_min_day_value $i_db $g_table TempWW $i_unixtime)" "$(f_get_avg_day_value $i_db $g_table TempWW $i_unixtime)" "$(f_get_max_day_value $i_db $g_table TempWW $i_unixtime)" "Warmw. [°C]"
-f_create_html_temp "data/week_pos3.html" "$m_RoomTemp1" "$(f_get_min_day_value $i_db $g_table RoomTemp1 $i_unixtime)" "$(f_get_avg_day_value $i_db $g_table RoomTemp1 $i_unixtime)" "$(f_get_max_day_value $i_db $g_table RoomTemp1 $i_unixtime)" "Raum [°C]"
-f_create_html_temp "data/week_pos4.html" "$m_TempKist" "$(f_get_min_day_value $i_db $g_table TempKist $i_unixtime)" "$(f_get_avg_day_value $i_db $g_table TempKist $i_unixtime)" "$(f_get_max_day_value $i_db $g_table TempKist $i_unixtime)" "Kessel [°C]"
 
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
