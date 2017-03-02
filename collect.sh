@@ -35,6 +35,7 @@ main(){
 		# use "1" for random numbers - if no sensors available
 		# f_get_sensordata $g_database $l_timestamp 1
 		f_get_position $g_database $l_timestamp 
+		f_create_path $g_database
 		# exit
 		# f_do_jsondata_month $g_database $g_table TempA TempWW RoomTemp1 TempKist
 		# f_do_jsondata_week $g_database $g_table TempA RoomTemp1 BrennerSekunden1 BrennerSekunden2

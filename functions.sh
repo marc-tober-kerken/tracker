@@ -211,10 +211,24 @@ log_info(){
   fi
 }
 
+log_info_silent(){
+  if [[ $g_log_level -ge 4 ]]
+  then
+    do_log_silent INFO $1
+  fi
+}
+
 log_warning(){
   if [[ $g_log_level -ge 3 ]]
   then
     do_log WARN $1
+  fi
+}
+
+log_warning_silent(){
+  if [[ $g_log_level -ge 3 ]]
+  then
+    do_log_silent WARN $1
   fi
 }
 
@@ -1158,7 +1172,7 @@ else
 	log_debug "$FUNCNAME $LINENO using timestamp $(date -d @$i_unixtime)"
 fi
 
-local gpsdata=$( gpspipe -w | grep -m 1 TPV )
+local gpsdata=$( gpspipe -w -n 10| grep -m 1 TPV )
 local latitude_n=$( echo "$gpsdata"  | jq '.lat' )
 local longitude_e=$( echo "$gpsdata"  | jq '.lon' )
 local elevation=$( echo "$gpsdata"  | jq '.alt' )
@@ -1172,6 +1186,82 @@ log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into $g_table values $sql_strin
 	
 eval "sqlite3 $i_db \"insert into $g_table values($sql_string);\""
 
+log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
+}
+
+function f_acos(){
+local -r i_value="$1"
+local -r c_pi=3.141592653589793
+echo $(echo "$c_pi / 2 - a($i_value / sqrt(1 - $i_value * $i_value))"|bc -l)
+}
+
+function f_distance(){
+log_info_silent "$FUNCNAME $LINENO start $1 $2 $3 $4"
+local -r -i l_runtime=$SECONDS
+# function to calculate distance in [km] between 2 lat/long coordinates
+# found here: https://ethertubes.com/bash-snippet-calculating-the-distance-between-2-coordinates/
+# input parameter 1: lat1 [°]
+# input parameter 2: long1 [°]
+# input parameter 3: lat2 [°]
+# input parameter 4: long2 [°]
+# output on stdout: distance in [km]
+local -r c_deg2rad=0.01745329251994329577
+local -r c_rad2deg=57.29577951308232087680
+
+local -r i_lat1=$(echo "$1 * $c_deg2rad"|bc -l)
+local -r i_long1=$(echo "$2 * $c_deg2rad"|bc -l)
+local -r i_lat2=$(echo "$3 * $c_deg2rad"|bc -l)
+local -r i_long2=$(echo "$4 * $c_deg2rad"|bc -l)
+local -r i_lat_delta=$(echo "($3 - $1) * $c_deg2rad"|bc -l)
+local -r i_long_delta=$(echo "($4 - $2) * $c_deg2rad"|bc -l)
+
+
+log_debug_silent "$FUNCNAME $LINENO lat/long [rad] lat/long [rad] $i_lat1 $i_long1 $i_lat2 $i_long2"
+log_debug_silent "$FUNCNAME $LINENO d-long/d-lat $i_long_delta $i_lat_delta"
+l_distance=$(echo "s($i_lat1) * s($i_lat2) + c($i_lat1) * c($i_lat2) * c($i_long_delta)"|bc -l)
+log_debug_silent "$FUNCNAME $LINENO distance1 $l_distance"
+
+l_distance=$(f_acos $l_distance)
+log_debug_silent "$FUNCNAME $LINENO distance2 $l_distance"
+
+l_distance=$(echo "$l_distance * $c_rad2deg * 60 * 1.85200"|bc -l|awk '{printf "%2.3f", $0}')
+log_debug_silent "$FUNCNAME $LINENO distance3 $l_distance"
+echo $l_distance
+
+log_info_silent "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
+}
+
+function f_create_path(){
+log_info_silent "$FUNCNAME $LINENO start $1 $2 $3 $4"
+local -r -i l_runtime=$SECONDS
+local -r i_db="$1"
+# Kerken Lat/Lon 51.433314N, 6.402108E
+# Geldern 51.513044N, 6.326899E
+# distance according to google maps: 10.28 [km]
+# f_distance 51.433314 6.402108 51.513044 6.326899 returns 10.27571162277727324957
+f_distance 51.433314 6.402108 51.513044 6.326899
+
+# sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
+
+l_now=$(f_get_timestamp_rounded_5)
+l_datapoints_count=$(sqlite3 $i_db "select count(1) from $g_table where unixtime>=($l_now - 1209600);")
+
+if [[ $l_datapoints_count > 1 ]]; then
+	l_datapoints=$(sqlite3 $i_db "select unixtime from $g_table where unixtime>=($l_now - 1209600) order by unixtime;")
+	
+	i=0
+	for l_datapoint in $l_datapoints
+	do 
+		i=$(( $i + 1 ))
+		l_lat_current=$(sqlite3 $i_db "select latitude_n from $g_table where unixtime=$l_datapoint;")
+		l_lon_current=$(sqlite3 $i_db "select longitude_e from $g_table where unixtime=$l_datapoint;")
+		if [[ $i > 1 ]]; then
+			f_distance $l_lat_before $l_lon_before $l_lat_current $l_lon_current
+		fi
+		l_lon_before=$l_lon_current
+		l_lat_before=$l_lat_current
+	done
+fi
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
 
