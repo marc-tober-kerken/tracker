@@ -54,8 +54,6 @@ local l_inifile="$l_own_name_wo"".ini"
 if [[ ! -f "$l_inifile" ]]; then
 	echo "$FUNCNAME $LINENO ini file $l_inifile not found"|tee -a $g_logfile
 	return 1
-else
-	echo "$FUNCNAME $LINENO using ini file $l_inifile for initialization"|tee -a $g_logfile
 fi
 
 if [[ ! -d "$l_own_path/data" ]]; then
@@ -65,7 +63,7 @@ fi
 
 # 1=only fatal; 2=only fatal+error; 3=...+warning; 4=...+info; 5=...+debug
 g_log_level=$(grep "^g_log_level" "$l_inifile"|cut -d= -f2)
-echo Loglevel $g_log_level from $l_inifile
+# echo Loglevel $g_log_level from $l_inifile
 log_debug "$FUNCNAME $LINENO initialized g_log_level with $g_log_level"
 
 declare -r -g g_database=$(grep "^g_database" "$l_inifile"|cut -d= -f2)
@@ -83,111 +81,51 @@ log_debug "$FUNCNAME $LINENO initialized g_mail_rcpt with \"$g_mail_rcpt\""
 declare -r -g g_object=$(grep "^g_object" "$l_inifile"|cut -d= -f2)
 log_debug "$FUNCNAME $LINENO initialized g_object with \"$g_object\""
 
+declare -r -g g_path_js=$(grep "^g_path_js=" "$l_inifile"|cut -d= -f2)
+log_debug "$FUNCNAME $LINENO initialized g_path_js with \"$g_path_js\""
+
 }
 
-function init_vars()
+
+function f_check_time()
 {
-# This script uses the following rrdtool database:
-# rrdtool create temp_pool.rrd --step 900 --start "20140101 00:00" \
-# DS:water:GAUGE:1200:-40:50 \
-# DS:air:GAUGE:1200:-40:50 \
-# DS:roof:GAUGE:1200:-40:80 \
-# DS:flow:GAUGE:1200:-40:50 \
-# DS:return:GAUGE:1200:-40:50 \
-# DS:delta:COMPUTE:return,flow,- \
-# DS:pump_flag:GAUGE:1200:0:1 \
-# DS:heat_flag:GAUGE:1200:0:1 \
-# DS:device:GAUGE:1200:0:90 \
-# RRA:AVERAGE:0.5:1:103680 \
-# RRA:MIN:0.5:96:3650 \
-# RRA:MAX:0.5:96:3650 \
-# RRA:AVERAGE:0.5:96:3650
+# This function checks if time of raspi os is valid
+# if raspi is used offline, it does not have access to NTP server and has no accurate time
+# will use timestamp from gps if this is the case
+local l_own_name=$(readlink -f ${BASH_SOURCE[0]})
+local l_own_path=$(dirname $l_own_name)
+local l_logfile=$l_own_path/logfile.log
 
-# determine own path
-_scriptlocal="$(readlink -f ${BASH_SOURCE[0]})"
-_base="$(dirname $_scriptlocal)"
+local l_valid_data=false
+local i=0
+while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
+	l_valid_data=true
+	i=$(( $i + 1 ))
+	local l_gpsdata=$(gpspipe -w -n 10| grep -m 1 TPV)
+	local l_gpstimestring=$(echo "$l_gpsdata" | jq '.time'| sed -e 's/^"//' -e 's/"$//')
+	l_result=$(date -d $l_gpstimestring +%s >/dev/null 2>&1)
+	l_rc=$?
+	if [[ "$l_rc" != "0" ]]; then
+		echo "$FUNCNAME $LINENO loop $i string $l_gpstimestring is invalid for date command"|tee -a $l_logfile
+		l_valid_data=false
+	fi
+done
 
-# declare environment (Test or Production)
-# this variable will be part of the used paths
-# expample pool_env=production; used path in script /production/...
-	pool_env="$_base"
-	send_cmd="sudo /home/pi/raspberry-remote/send"
+if [[ "$l_valid_data" = "true" ]]; then
+	local l_gpstime=$(date -d $l_gpstimestring +%s)
+	local l_systime=$(date +%s)
+	local l_diff=$(echo "$l_gpstime - $l_systime"|bc -l|tr -d -)
 
-	case "$pool_env" in
-		/production )
-			subdomain=pool.tober-kerken.de
-			# 1=only fatal; 2=only fatal+error; 3=...+warning; 4=...+info; 5=...+debug
-			echo "Environment: $pool_env" ;;
-		/testtemp )
-			subdomain=test.tober-kerken.de
-
-			echo "Environment: $pool_env"  ;;
-	esac
-	
-# create timestamp rounded to 15min interval
-	set $(date "+%Y %m %d %H %M")
-	# only for test & debug: set desired date manually
-	# set $(date -d "20140826 00:00" +"%Y %m %d %H %M")
-	m=$((100+15*(${5#0}/15)))
-	timestamp_rounded="$1$2$3 $4:${m#1}"
-	timestamp_rounded_unix=$(date --date "$1$2$3 $4:${m#1}" +%s)
-	timestamp_real=$(date "+%Y%m%d %H:%M")
-   	timestamp_real_unix=$(date +%s)
-
-# define sensors
-
-bee_zone1_sens=/sys/bus/w1/devices/28-000005ce8588/w1_slave
-bee_zone2_sens=/sys/bus/w1/devices/28-000005cebfa7/w1_slave
-bee_zone3_sens=/sys/bus/w1/devices/28-000005ce05e0/w1_slave
-bee_air_sens=/sys/bus/w1/devices/28-000005ceaf15/w1_slave
-air_sens=/sys/bus/w1/devices/28-000005d2c10c/w1_slave
-water_sens=/sys/bus/w1/devices/28-000005d2c38e/w1_slave
-return_sens=/sys/bus/w1/devices/28-000005d3c0f8/w1_slave
-flow_sens=/sys/bus/w1/devices/28-000005d3010b/w1_slave
-roof_sens=/sys/bus/w1/devices/28-000005d2ebb5/w1_slave
-device_sens=/sys/class/thermal/thermal_zone0/temp
-
-# define logfile
-	logfile=$pool_env/logfile.log
-	g_logfile=$pool_env/logfile.log
-    redo_logfile=$pool_env/redolog.sh
-	redo_logfile_sql=$pool_env/redolog_sql.sh
-
-# define database
-    database=$pool_env/temp_pool.rrd
-
-# define database_sql
-    database_sql=$pool_env/temp_pool.sqlite
-	
-# check & define timer; only quarter hours!
-	pump_from="10:00"
-	pump_to="18:30"
-
-# define address of electrical outlets
-	pump_power="10001 2"
-	heat_power="10001 3"
-
-# minimum temperature difference between roof and water to turn on heating
-# checked and re-calculated every 15min
-	temp_diff=5
-
-# define pump flow rate in liter / hour	
-	pump_flowrate=3000
-
-# define winter mode on = 1 or off = 0
-# no switches of pump or heat occur any more in winter mode
-	winter_mode_pump=0
-	winter_mode_heat=0
-	
-# define heat_priority
-# if this is 1: whenever heating seems to be appropriate, enable pump + heating even if outside of pump timer
-# if this is 0: only heat when appropriate during pump timer hours
-	heat_priority=1
-
-# displaypi IP adress
-	displaypi_ip=192.168.24.45
-	
-
+	if (( $l_diff > 50 )); then
+		sudo date -s @$l_gpstime
+		echo "Time Difference detected - use GPS time $l_gpstimestring - systime was $(date -d @$l_systime) - is now $(date)"|tee -a $l_logfile
+	else
+		echo "No Time Difference detected - GPS $l_gpstimestring - sysdate $(date)"|tee -a $l_logfile
+	fi
+else
+	echo "GPS timestring data $l_gpstimestring invalid - bad reception?"|tee -a $l_logfile
+	return 128
+fi
 }
 
 log_debug(){
@@ -335,787 +273,88 @@ local i_return=$(sqlite3 $i_db "select $i_field from $i_table where unixtime=$i_
 echo $i_return
 }
 
-f_get_avg_day_value(){
-# function to retrieve a value from the database
+f_create_path_js(){
+log_info "$FUNCNAME $LINENO start $1 $2 $3"
+local -r -i l_runtime=$SECONDS
+# function to create file with positions
+# for markers in google maps
 # input parameter 1: sqlite3 database with full path
 # input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired day; function will generate appropriate 00:00-23:59 for same day
+# input parameter 3: filename with markers for google maps
+
 local -r i_db="$1"
 local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
+local -r i_filename="$3"
 
-# output:
-# value of field for specified unixepoch time.
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
-
-local l_day_hlp=$(date -d @$i_unixtime "+%Y%m%d 00:00")
-local l_day_start=$(date -d "$l_day_hlp" +%s)
-local l_day_end=$(( $l_day_start + 86400 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-local l_return=$(sqlite3 $i_db "select round(avg($i_field),1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-echo $l_return
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
-
-f_get_min_day_value(){
-# function to retrieve a value from the database
-# input parameter 1: sqlite3 database with full path
-# input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired day; function will generate appropriate 00:00-23:59 for same day
-local -r i_db="$1"
-local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
-
-# output:
-# value of field for specified unixepoch time.
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
-
-local l_day_hlp=$(date -d @$i_unixtime "+%Y%m%d 00:00")
-local l_day_start=$(date -d "$l_day_hlp" +%s)
-local l_day_end=$(( $l_day_start + 86400 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-local l_return=$(sqlite3 $i_db "select round(min($i_field),1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-echo $l_return
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
-
-f_get_max_day_value(){
-# function to retrieve a value from the database
-# input parameter 1: sqlite3 database with full path
-# input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired day; function will generate appropriate 00:00-23:59 for same day
-local -r i_db="$1"
-local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
-
-# output:
-# value of field for specified unixepoch time.
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
-
-local l_day_hlp=$(date -d @$i_unixtime "+%Y%m%d 00:00")
-local l_day_start=$(date -d "$l_day_hlp" +%s)
-local l_day_end=$(( $l_day_start + 86400 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-local l_return=$(sqlite3 $i_db "select round(max($i_field),1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-echo $l_return
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
-
-f_get_delta_hour_value(){
-# function to retrieve a value from the database
-# input parameter 1: sqlite3 database with full path
-# input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired hour; function will generate appropriate 00:00-00:59 for hour
-local -r i_db="$1"
-local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
-
-# output:
-# difference of max value and min value of that hour
-# used e.g. for runtime in [s] in that hour
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
-
-local l_hour_hlp=$(date -d @$i_unixtime "+%Y%m%d %H:00")
-local l_hour_start=$(date -d "$l_hour_hlp" +%s)
-local l_hour_end=$(( $l_hour_start + 3600 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-
-local l_min_value=$(sqlite3 $i_db "select min($i_field) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-local l_max_value=$(sqlite3 $i_db "select max($i_field) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-
-local l_return=$(( $l_max_value - $l_min_value ))
-
-log_debug_silent "$FUNCNAME $LINENO datapoints $l_datacount with min $l_min_value and max $l_max_value - delta is $l_return"
-
-if [ $(echo "$l_return > 3600" |bc) -eq 0 ]; then
-	echo $l_return
-	log_debug_silent "$FUNCNAME $LINENO $l_return is normal"
-else
-	echo 3600
-	log_debug_silent "$FUNCNAME $LINENO $l_return larger than 3600"
-fi
-
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
-
-f_get_delta_day_value(){
-# function to retrieve a value from the database
-# input parameter 1: sqlite3 database with full path
-# input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired hour; function will generate appropriate 00:00-00:59 for hour
-local -r i_db="$1"
-local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
-
-# output:
-# difference of max value and min value of that hour
-# used e.g. for runtime in [s] in that hour
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
-
-local l_day_hlp=$(date -d @$i_unixtime "+%Y%m%d %H:00")
-local l_day_start=$(date -d "$l_day_hlp" +%s)
-local l_day_end=$(( $l_day_start + 86400 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-
-local l_min_value=$(sqlite3 $i_db "select min($i_field) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-local l_max_value=$(sqlite3 $i_db "select max($i_field) from $i_table where unixtime>=$l_day_start and unixtime<$l_day_end;")
-
-# Attention, only possible for integer values... i_field must have type int in db
-local l_return=$(( $l_max_value - $l_min_value ))
-
-log_debug_silent "$FUNCNAME $LINENO $(date -d @$i_unixtime) datapoints $l_datacount with min $l_min_value and max $l_max_value - delta is $l_return"
-
-echo $l_return
-
-# if [ $(echo "$l_return > 3600" |bc) -eq 0 ]; then
-	# echo $l_return
-	# log_debug_silent "$FUNCNAME $LINENO $l_return is normal"
-# else
-	# echo 3600
-	# log_debug_silent "$FUNCNAME $LINENO $l_return larger than 3600"
-# fi
-
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
+cat > $i_filename <<f_create_path_js_EOF
+eqfeed_callback({
+	"type":"FeatureCollection",
+	"features": [
+f_create_path_js_EOF
 
 
-f_get_avg_hour_value(){
-# function to retrieve a value from the database
-# input parameter 1: sqlite3 database with full path
-# input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired hour; function will generate appropriate 00:00-00:59 for hour
-local -r i_db="$1"
-local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
+l_datapoints=$(sqlite3 $i_db "select unixtime from $i_table order by unixtime;")
 
-# output:
-# value of field for specified unixepoch time.
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
+for l_datapoint in $l_datapoints
+do 
+	l_lat=$(f_get_single_value $i_db $i_table latitude_n $l_datapoint)
+	l_lon=$(f_get_single_value $i_db $i_table longitude_e $l_datapoint)
+	l_elevation=$(f_get_single_value $i_db $i_table elevation $l_datapoint)
+	log_debug "$FUNCNAME $LINENO processing $l_datapoint, got $l_lat $l_lon $l_elevation"
+	if [[ "$l_elevation" = "" ]]; then
+		l_coordinates="[$l_lon,$l_lat]"
+	else
+		l_coordinates="[$l_lon,$l_lat,$l_elevation]"
+	fi
 
-local l_hour_hlp=$(date -d @$i_unixtime "+%Y%m%d %H:00")
-local l_hour_start=$(date -d "$l_hour_hlp" +%s)
-local l_hour_end=$(( $l_hour_start + 3600 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-local l_return=$(sqlite3 $i_db "select round(avg($i_field),1) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-echo $l_return
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
-
-f_get_avg_2h_value(){
-# function to retrieve a value from the database
-# input parameter 1: sqlite3 database with full path
-# input parameter 2: tablename
-# input parameter 3: field name
-# input parameter 4: unixepoch time for desired hour; function will generate appropriate 00:00-00:59 for hour
-local -r i_db="$1"
-local -r i_table="$2"
-local -r i_field="$3"
-local -r i_unixtime="$4"
-
-# output:
-# value of field for specified unixepoch time.
-#
-# return code:
-# 0: success: some data found in DB for desired time
-# 1: no data found in DB
-
-local l_hour_hlp=$(date -d @$i_unixtime "+%Y%m%d %H:00")
-local l_hour_start=$(date -d "$l_hour_hlp" +%s)
-local l_hour_end=$(( $l_hour_start + 7200 ))
-
-local l_datacount=$(sqlite3 $i_db "select count(1) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-local l_return=$(sqlite3 $i_db "select round(avg($i_field),1) from $i_table where unixtime>=$l_hour_start and unixtime<$l_hour_end;")
-echo $l_return
-if [[ "$l_datacount" = "0" ]]; then
-	# no data selected
-	return 1
-else
-	# data found in DB
-	return 0
-fi
-}
-
-f_create_opt_month1(){
-# function to create option file for google charts
-#
-# input parameter 1: filename with full path
-local -r l_filename="$1"
-local -r l_title="$2"
-
-cat > $l_filename <<f_create_opt_month1_EOF
-{
-	"width":900,
-	"height":525,
-	"backgroundColor": {
-		"stroke": "#ddd",
-		"strokeOpacity":1
-	},
-	"chart": {
-		"title": "Temperaturen Bienenstock",
-		"subtitle": "in Grad Celsius",
-		"style": {
-			"background": {
-				"padding": 20,
-				"stroke": {
-					"width": 4
-				}
-			}
-		}
-	},
-	"legend": {
-		"position":"none"
-	},
-	"vAxis": {
-		"title": "Temperatur [°C]",
-		"format": "decimal"
-	},
-	"hAxis": {
-		"title": "$l_title",
-		"format": "d"
-	},
-	"axes": {
-		"x": {
-			"all": {
-				"gridlines":"true",
-				"ticks": {
-					"pixelsPerTick": 16
-				}
-			}
-		}
-	}
-}
-f_create_opt_month1_EOF
-}
-
-f_create_html_temp(){
-# function to create single html file, which includes specified temperatures
-# this html will be included on final display on webserver
-# input parameter 1: filename
-# input parameter 2: temperature e.g. "-23.2"
-# input parameter 3: temperature min e.g. "-23.2"
-# input parameter 4: temperature avg e.g. "-23.2"
-# input parameter 5: temperature max e.g. "-23.2"
-# input parameter 6: temperature name e.g. "Zone 1 [°C]"
-
-local -r i_filename="$1"
-local -r i_temp_current="$2"
-local -r i_temp_min="$3"
-local -r i_temp_avg="$4"
-local -r i_temp_max="$5"
-local -r i_temp_name="$6"
-
-local l_temp_part1=$(echo $i_temp_current|cut -d"." -f1)
-local l_temp_part2=$(echo $i_temp_current|cut -d"." -f2)
-
-cat > $i_filename <<f_create_html_temp_EOF
-<head1>$i_temp_name</head1>
-<minmax_left>$i_temp_min</minmax_left>
-<minmax_mid>$i_temp_avg</minmax_mid>
-<minmax_right>$i_temp_max</minmax_right>
-<temp_no>
-	<temperature>$l_temp_part1</temperature>
-	<fraction>.$l_temp_part2</fraction>
-	<cels>°</cels>
-</temp_no>
-f_create_html_temp_EOF
-}
-
-f_create_html_header(){
-# function to create single html file, which includes current date
-# this html will be included on final display on webserver
-# input parameter 1: filename
-# input parameter 2: Line1 Text
-
-local -r i_filename="$1"
-local -r i_text1="$2"
-
-# <h2>11.06. 19:15</h2>
-# <h3>Min/Avg/Max seit 00:00<h3>
-
-cat > $i_filename <<f_create_html_header_EOF
-<h2>$i_text1</h2>
-<h3>Min/Avg/Max seit 00:00<h3>
-f_create_html_header_EOF
-}
-
-f_create_opt_month2(){
-# function to create option file for google charts
-#
-# input parameter 1: filename with full path
-local -r l_filename="$1"
-local -r l_title="$2"
-
-cat > $l_filename <<f_create_opt_month2_EOF
-{
-			"title":"Temperaturen Bienenstock",
-			"width": 900,
-			"height": 525,
-			"backgroundColor": {
-				"stroke": "#ddd",
-				"strokeOpacity": 1
+cat >> $i_filename <<f_create_path_js2_EOF
+			{"type":"Feature",
+			"properties":{
+				"time":$l_datapoint
 			},
-			"chartArea": {"width": "88%", "height": "70%"},
-			"curveType": "function",
-			"theme": "material",
-			"legend": {
-				"position": "top"
-			},
-			"vAxis": {
-				"title": "Temperatur [°C]",
-				"format": "decimal"
-			},
-			"hAxis": {
-				"title": "$l_title",
-				"gridlines": {
-					"count": 31
-				},
-				"format": "d"
+			"geometry":{
+				"type":"Point",
+				"coordinates":$l_coordinates
 			}
-		}
-f_create_opt_month2_EOF
-}
+		},
+f_create_path_js2_EOF
 
-f_create_opt_week(){
-# function to create option file for google charts
-#
-# input parameter 1: filename with full path
-local -r l_filename="$1"
-local -r l_title="$2"
-local l_date="$3"
-
-log_debug_silent "$FUNCNAME $LINENO got date $l_date"
-l_ticks=""
-l_date=$(( $l_date - 86400 ))
-log_debug_silent "$FUNCNAME $LINENO calc date $(date -d @$l_date)"
-for i in {0..7}
-do
-	i_date_calc=$(( $i * 86400 ))
-	i_date=$(( $l_date + $i_date_calc ))
-	log_debug_silent "$FUNCNAME $LINENO $(date -d @$i_date) $l_ticks"
-	l_datestring_Y=$(date -d "@$i_date" +%Y)
-	l_datestring_M=$(( $(date -d "@$i_date" +%-m) - 1 ))
-	# javascript has Jan=0, Feb=1, ...
-	l_datestring_D=$(date -d "@$i_date" +%-d)
-	l_complete="Date($l_datestring_Y"",""$l_datestring_M"",""$l_datestring_D"
-	l_ticks="$l_ticks""{\"v\":"\""$l_complete"",0,0,0)\",\"f\":\"$(date -d @$i_date +%A)\"},"
 done
 
-i_date_calc=$(( 8 * 86400 ))
-i_date=$(( $l_date + $i_date_calc ))
-l_datestring_Y=$(date -d "@$i_date" +%Y)
-l_datestring_M=$(( $(date -d "@$i_date" +%-m) - 1 ))
-# javascript has Jan=0, Feb=1, ...
-l_datestring_D=$(date -d "@$i_date" +%-d)
-l_complete="Date($l_datestring_Y"",""$l_datestring_M"",""$l_datestring_D"
-l_ticks="$l_ticks""{\"v\":"\""$l_complete"",0,0,0)\",\"f\":\"$(date -d @$i_date +%A)\"}"
+# remove last line "}," - has to be without ","
+sed -i '$ d' $i_filename
 
-
-# {"v":"Date(2016,11,20,00,00,00)"}
-
-log_debug_silent "$FUNCNAME $LINENO $(date -d @$l_date) $l_ticks"
-
-cat > $l_filename <<f_create_opt_week_EOF
-{
-	"title":"Temperaturen und Brennerlaufzeiten",
-	"width": 900,
-	"height": 525,
-	"backgroundColor": {
-		"stroke": "#ddd",
-		"strokeOpacity": 1
-	},
-	"chartArea": {"width": "88%", "height": "70%"},
-	"curveType": "function",
-	"theme": "material",
-	"legend": {
-		"position": "top"
-	},
-	"seriesType": "line",
-	"series": {
-		"2": {
-			"type": "bars",
-			"targetAxisIndex": "1",
-			"color": "#D0D0D0"
-		},
-		"3": {
-			"type": "bars",
-			"targetAxisIndex": "1",
-			"color": "#C0C0C0"
+cat >> $i_filename <<f_create_path_js3_EOF
 		}
-	},
-	"vAxes": {
-		"0": {
-			"title": "Temperatur [°C]",
-			"format": "decimal"
-		},
-		"1": {
-			"title": "Brennzeit [s] während 24h = 86400s",
-			"format": "decimal",
-			"ticks": [{"v":"21600","f":"6h"},{"v":"43200","f":"12h"},{"v":"64800","f":"18h"},{"v":"86400","f":"24h"}]
-		}
-	},
-	"hAxis": {
-		"title": "$l_title",
-		"format": "H",
-		"gridlines": {
-			"count": -1,
-			"units": {
-				"days": {"format": ["MMM dd"]},
-				"hours": {"format": ["HH:mm", "ha"]}
-			}
-		},
-		"ticks": [$l_ticks]
-	}
-}
-f_create_opt_week_EOF
-}
+	]
+})
+f_create_path_js3_EOF
 
-f_create_opt_day(){
-# function to create option file for google charts
-#
-# input parameter 1: filename with full path
-local -r l_filename="$1"
-local -r l_title="$2"
-local -r l_date="$3"
-
-l_datestring_Y=$(date -d "@$l_date" +%Y)
-l_datestring_M=$(( $(date -d "@$l_date" +%-m) - 1 ))
-# javascript has Jan=0, Feb=1, ...
-l_datestring_D=$(date -d "@$l_date" +%-d)
-
-l_complete="Date($l_datestring_Y"",""$l_datestring_M"",""$l_datestring_D"
-l_ticks=""
-for i in {0,2,4,6,8,10,12,14,16,18,20,22}
-do
-	l_ticks="$l_ticks""{\"v\":"\""$l_complete"",$i,0,0)\"},"
-done
-
-l_date_next_day=$(( $l_date + 86400 ))
-
-h1=$(date -d "@$l_date")
-h2=$(date -d "@$l_date_next_day")
-log_debug_silent "$FUNCNAME $LINENO $l_date $h1 $l_date_next_day $h2"
-
-l_datestring_Y=$(date -d "@$l_date_next_day" +%Y)
-l_datestring_M=$(( $(date -d "@$l_date_next_day" +%-m) - 1 ))
-# javascript has Jan=0, Feb=1, ...
-l_datestring_D=$(date -d "@$l_date_next_day" +%-d)
-l_complete="Date($l_datestring_Y"",""$l_datestring_M"",""$l_datestring_D"
-l_ticks="$l_ticks""{\"v\":"\""$l_complete"",0,0,0)\"}"
-
-# {"v":"Date(2016,11,20,00,00,00)"}
-
-log_debug_silent "$FUNCNAME $LINENO $l_date $l_complete $l_ticks"
-
-cat > $l_filename <<f_create_opt_day_EOF
-{
-	"title":"Temperaturen und Brennerlaufzeiten",
-	"width": 900,
-	"height": 525,
-	"backgroundColor": {
-		"stroke": "#ddd",
-		"strokeOpacity": 1
-	},
-	"chartArea": {"width": "88%", "height": "70%"},
-	"curveType": "function",
-	"theme": "material",
-	"legend": {
-		"position": "top"
-	},
-	"seriesType": "line",
-	"series": {
-		"4": {
-			"type": "bars",
-			"targetAxisIndex": "1",
-			"color": "#D0D0D0"
-		},
-		"5": {
-			"type": "bars",
-			"targetAxisIndex": "1",
-			"color": "#C0C0C0"
-		}
-	},
-	"vAxes": {
-		"0": {
-			"title": "Temperatur [°C]",
-			"format": "decimal"
-		},
-		"1": {
-			"title": "Brennzeit [s] während 1h = 3600s",
-			"format": "decimal",
-			"ticks": [{"v":"900","f":"0,25h"},{"v":"1800","f":"0,50h"},{"v":"2700","f":"0,75h"},{"v":"3600","f":"1,00h"}]
-		}
-	},
-	"hAxis": {
-		"title": "$l_title",
-		"format": "H",
-		"gridlines": {
-			"count": -1,
-			"units": {
-				"days": {"format": ["MMM dd"]},
-				"hours": {"format": ["HH:mm", "ha"]}
-			}
-		},
-		"ticks": [$l_ticks]
-	}
-}
-f_create_opt_day_EOF
-}
-
-f_create_opt_day_iphone(){
-# function to create option file for google charts
-#
-# input parameter 1: filename with full path
-local -r l_filename="$1"
-local -r l_title="$2"
-local -r l_date="$3"
-
-l_datestring_Y=$(date -d "@$l_date" +%Y)
-l_datestring_M=$(( $(date -d "@$l_date" +%-m) - 1 ))
-# javascript has Jan=0, Feb=1, ...
-l_datestring_D=$(date -d "@$l_date" +%-d)
-
-l_complete="Date($l_datestring_Y"",""$l_datestring_M"",""$l_datestring_D"
-l_ticks=""
-for i in {0,2,4,6,8,10,12,14,16,18,20,22}
-do
-	l_ticks="$l_ticks""{\"v\":"\""$l_complete"",$i,0,0)\"},"
-done
-
-l_date_next_day=$(( $l_date + 86400 ))
-
-h1=$(date -d "@$l_date")
-h2=$(date -d "@$l_date_next_day")
-log_debug_silent "$FUNCNAME $LINENO $l_date $h1 $l_date_next_day $h2"
-
-l_datestring_Y=$(date -d "@$l_date_next_day" +%Y)
-l_datestring_M=$(( $(date -d "@$l_date_next_day" +%-m) - 1 ))
-# javascript has Jan=0, Feb=1, ...
-l_datestring_D=$(date -d "@$l_date_next_day" +%-d)
-l_complete="Date($l_datestring_Y"",""$l_datestring_M"",""$l_datestring_D"
-l_ticks="$l_ticks""{\"v\":"\""$l_complete"",0,0,0)\"}"
-
-# {"v":"Date(2016,11,20,00,00,00)"}
-
-log_debug_silent "$FUNCNAME $LINENO $l_date $l_complete $l_ticks"
-
-cat > $l_filename <<f_create_opt_day_iphone_EOF
-{
-	"title":"Temperaturen und Brennerlaufzeiten",
-	"width": 736,
-	"height": 414,
-	"backgroundColor": {
-		"stroke": "#ddd",
-		"strokeOpacity": 1
-	},
-	"chartArea": {"width": "85%", "height": "70%"},
-	"curveType": "function",
-	"theme": "material",
-	"legend": {
-		"position": "top"
-	},
-	"seriesType": "line",
-	"series": {
-		"4": {
-			"type": "bars",
-			"targetAxisIndex": "1",
-			"color": "#D0D0D0"
-		},
-		"5": {
-			"type": "bars",
-			"targetAxisIndex": "1",
-			"color": "#C0C0C0"
-		}
-	},
-	"vAxes": {
-		"0": {
-			"title": "Temperatur [°C]",
-			"format": "decimal"
-		},
-		"1": {
-			"title": "Brennzeit [s] während 1h = 3600s",
-			"format": "decimal",
-			"ticks": [{"v":"900","f":"0,25h"},{"v":"1800","f":"0,50h"},{"v":"2700","f":"0,75h"},{"v":"3600","f":"1,00h"}]
-		}
-	},
-	"hAxis": {
-		"title": "$l_title",
-		"format": "H",
-		"gridlines": {
-			"count": -1,
-			"units": {
-				"days": {"format": ["MMM dd"]},
-				"hours": {"format": ["HH:mm", "ha"]}
-			}
-		},
-		"ticks": [$l_ticks]
-	}
-}
-f_create_opt_day_iphone_EOF
-}
-
-
-f_create_opt_day1(){
-# function to create option file for google charts
-#
-# input parameter 1: filename with full path
-local -r l_filename="$1"
-local -r l_title="$2"
-
-cat > $l_filename <<f_create_opt_month2_EOF
-{
-			"title":"Temperaturen Bienenstock",
-			"width": 900,
-			"height": 525,
-			"backgroundColor": {
-				"stroke": "#ddd",
-				"strokeOpacity": 1
-			},
-			"chartArea": {"width": "88%", "height": "70%"},
-			"curveType": "function",
-			"theme": "material",
-			"legend": {
-				"position": "top"
-			},
-			"vAxis": {
-				"title": "Temperatur [°C]",
-				"format": "decimal"
-			},
-			"hAxis": {
-				"title": "$l_title",
-				"gridlines": {
-					"count": 31
-				},
-				"format": "d"
-			}
-		}
-f_create_opt_month2_EOF
-}
-
-f_get_temp(){
-# function to retrieve a temperatur value from the specified sensor
-# input parameter 1: sensor name like e.g. "/sys/bus/w1/devices/28-000005ce8588/w1_slave"
-# input parameter 2: if parameter 2 = 1, function will provide random number as temperature, not using a sensor
-# returns temperature on stdout
-# returncode 1 if sensor does not exist
-# returncode 0 if sensor exists and returned a value
-local -r i_sensor="$1"
-local -r i_random="$2"
-
-if [[ "$i_random" = "1" ]]; then
-	local l_temp=$(shuf -i 10000-30000 -n 1)
-	local l_convert=$(echo "scale=1; $l_temp / 1000" | bc | awk '{printf "%2.1f", $0}')
-	echo $l_convert
-	return 0
-fi
-
-if [[ ! -e "$i_sensor" ]]; then
-	return 1
-else
-	local l_temp=$(grep t= $i_sensor|cut -d= -f2)
-	local l_convert=$(echo "scale=1; $l_temp / 1000" | bc | awk '{printf "%2.1f", $0}')
-	echo $l_convert
-	return 0
-fi	
+log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
 
 function f_create_DB
 {
 # function to create empty specified DB - if not already existing DB
 # input parameter 1: sqlite3 database file
-# input parameter 2: sqlite3 database tablename
 local -r i_db="$1"
-local -r i_table="$2"
 
 log_info "$FUNCNAME $LINENO start"
 local -r -i l_runtime=$SECONDS
 
-if [[ "$i_db" = "" ]] || [[ "$i_table" = "" ]]; then
-	log_error "$FUNCNAME $LINENO DB or table not specified"
+if [[ "$i_db" = "" ]]; then
+	log_error "$FUNCNAME $LINENO DB not specified"
 	return 1
 fi
 
-local l_today=$(date +%Y%m%d)
-local l_today_00=$(date -d "$l_today" +%s)
-
 if [[ ! -e "$i_db" ]]; then
 	# object - text description for object to be tracked
-	# 
-	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
-	log_info "$FUNCNAME $LINENO DB $i_db initialized and table $i_table created"
+    sqlite3 $i_db "CREATE TABLE IF NOT EXISTS position (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
+	log_info "$FUNCNAME $LINENO DB $i_db initialized and table position created"
 else
 	log_info "$FUNCNAME $LINENO DB $i_db already exists"
+	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS position (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
+	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS path14 (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT, distance REAL);"
 fi
 
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
@@ -1149,14 +388,20 @@ echo $(date --date "$1$2$3 $4:${m#1}" +%s)
 }
 
 function f_get_position(){
-log_info "$FUNCNAME $LINENO start"
+log_info "$FUNCNAME $LINENO start $1 $2 $3"
 local -r -i l_runtime=$SECONDS
 # function to retrieve position from GPS device
+# check sanity of retrieved values
+# Google Maps min/max values
+# Latitude: -85 to +85 (actually -85.05115 for some reason)
+# Longitude: -180 to +180
 # input parameter 1: sqlite3 database file
-# input parameter 2: unixtime - so that all functions will use the same reference time independent of runtime of certain functions
+# input parameter 2: tablename
 
 local -r i_db="$1"
-local -r i_unixtime="$2"
+local -r i_table="$2"
+
+local l_unixtime=$(date +%s)
 
 if [[ "$i_db" = "" ]]; then
 	log_error "$FUNCNAME $LINENO no database specified"
@@ -1165,26 +410,62 @@ else
 	log_debug "$FUNCNAME $LINENO using DB $i_db"
 fi
 
-if [[ "$i_unixtime" = "" ]]; then
-	log_error "$FUNCNAME $LINENO no timestamp specified"
+if [[ "$i_table" = "" ]]; then
+	log_error "$FUNCNAME $LINENO no DB table specified"
 	return 128
 else
-	log_debug "$FUNCNAME $LINENO using timestamp $(date -d @$i_unixtime)"
+	log_debug "$FUNCNAME $LINENO using DB table $i_table"
 fi
 
-local gpsdata=$( gpspipe -w -n 10| grep -m 1 TPV )
-local latitude_n=$( echo "$gpsdata"  | jq '.lat' )
-local longitude_e=$( echo "$gpsdata"  | jq '.lon' )
-local elevation=$( echo "$gpsdata"  | jq '.alt' )
-local gpstime=$( echo "$gpsdata" | jq '.time' )
-log_info "$FUNCNAME $LINENO position $latitude_n $longitude_e at elevation $elevation with time $gpstime"
+local l_valid_data=false
+local i=0
+while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
+	l_valid_data=true
+	i=$(( $i + 1 ))
+	local gpsdata=$(gpspipe -w -n 10|grep -m 1 TPV)
+
+	local l_lat_new=$(echo "$gpsdata"|jq '.lat')
+	if [[ $(echo "$l_lat_new >= -85 && $l_lat_new <= 85"|bc) == 1 ]]; then
+		log_info "$FUNCNAME $LINENO loop $i l_lat_new $l_lat_new is valid"
+	else
+		log_error "$FUNCNAME $LINENO l_lat_new $l_lat_new is invalid"
+		l_valid_data=false
+	fi
+
+	local l_lon_new=$(echo "$gpsdata"|jq '.lon')
+	if [[ $(echo "$l_lon_new >= -180 && $l_lon_new <= 180"|bc) == 1 ]]; then
+		log_info "$FUNCNAME $LINENO loop $i l_lon_new $l_lon_new is valid"
+	else
+		log_error "$FUNCNAME $LINENO l_lon_new $l_lon_new is invalid"
+		l_valid_data=false
+	fi
+	
+	local l_elevation_new=$(echo "$gpsdata"|jq '.alt')
+	log_debug "$FUNCNAME $LINENO value $l_elevation \"$l_elevation\" "
+
+	local l_gpstime_new=$(echo "$gpsdata"|jq '.time')
+	log_debug "$FUNCNAME $LINENO $l_lat_new $l_lon_new $l_elevation $l_gpstime_new"
+	local l_last_entry=$(sqlite3 $i_db "select max(unixtime) from $i_table;")
+	local l_lat=$(f_get_single_value $i_db $i_table latitude_n $l_last_entry)
+	local l_lon=$(f_get_single_value $i_db $i_table longitude_e $l_last_entry)
+done
+
+log_debug "$FUNCNAME $LINENO $l_last_entry $l_lat $l_lon"
+local l_distance=$(f_distance $l_lat $l_lon $l_lat_new $l_lon_new)
+log_info "$FUNCNAME $LINENO position $l_lat_new $l_lon_new at l_elevation_new $l_elevation_new with time $l_gpstime_new distance $l_distance"
 log_debug "$FUNCNAME $LINENO raw data $gpsdata"
 
-sql_string="$i_unixtime,'$g_object',$longitude_e,$latitude_n,$elevation,'$gpstime'"
-
-log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into $g_table values $sql_string"
-	
-eval "sqlite3 $i_db \"insert into $g_table values($sql_string);\""
+# if moved more than 100m, write values into DB 
+# otherwise not
+if [ $(echo "$l_distance > 0.1" |bc) -eq 1 ]; then
+	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new'"
+	log_info "$FUNCNAME $LINENO sqlite3 $i_db insert or replace into $i_table values $sql_string"
+	eval "sqlite3 $i_db \"insert or replace into $i_table values($sql_string);\""
+	f_create_path_js $i_db $i_table $g_path_js
+	f_do_transfer
+else
+	log_info "$FUNCNAME $LINENO nothing recorded - distance $l_distance <= 0.1 km"
+fi
 
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
@@ -1244,19 +525,40 @@ f_distance 51.433314 6.402108 51.513044 6.326899
 # sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
 
 l_now=$(f_get_timestamp_rounded_5)
-l_datapoints_count=$(sqlite3 $i_db "select count(1) from $g_table where unixtime>=($l_now - 1209600);")
+l_datapoints_count=$(sqlite3 $i_db "select count(1) from $g_table where unixtime>=($l_now - 86400);")
 
 if [[ $l_datapoints_count > 1 ]]; then
-	l_datapoints=$(sqlite3 $i_db "select unixtime from $g_table where unixtime>=($l_now - 1209600) order by unixtime;")
+	l_datapoints=$(sqlite3 $i_db "select unixtime from $g_table where unixtime>=($l_now - 86400) order by unixtime;")
 	
 	i=0
 	for l_datapoint in $l_datapoints
 	do 
 		i=$(( $i + 1 ))
-		l_lat_current=$(sqlite3 $i_db "select latitude_n from $g_table where unixtime=$l_datapoint;")
-		l_lon_current=$(sqlite3 $i_db "select longitude_e from $g_table where unixtime=$l_datapoint;")
+		l_lat_current=$(f_get_single_value $i_db $g_table latitude_n $l_datapoint)
+		l_lon_current=$(f_get_single_value $i_db $g_table longitude_e $l_datapoint)
 		if [[ $i > 1 ]]; then
-			f_distance $l_lat_before $l_lon_before $l_lat_current $l_lon_current
+			l_distance=$(f_distance $l_lat_before $l_lon_before $l_lat_current $l_lon_current)
+			log_debug "$FUNCNAME $LINENO distance to last point is $l_distance"
+			if [ $(echo "$l_distance > 0.05" |bc) -eq 1 ]; then
+				log_info "$FUNCNAME $LINENO distance $l_distance greater than 50m"
+				l_elevation=$(sqlite3 $i_db "select elevation from $g_table where unixtime=$l_datapoint;")
+				if [[ "$l_elevation" = "" ]]; then
+					l_elevation=NULL
+				fi
+				l_gpstime=$(sqlite3 $i_db "select gpstime from $g_table where unixtime=$l_datapoint;")
+				sql_string="$l_datapoint,'$g_object',$l_lon_current,$l_lat_current,$l_elevation,'$l_gpstime',$l_distance"
+				log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into path14 values $sql_string"
+				eval "sqlite3 $i_db \"insert or replace into path14 values($sql_string);\""
+			fi
+		else
+			l_elevation=$(sqlite3 $i_db "select elevation from $g_table where unixtime=$l_datapoint;")
+			if [[ "$l_elevation" = "" ]]; then
+				l_elevation=NULL
+			fi
+			l_gpstime=$(sqlite3 $i_db "select gpstime from $g_table where unixtime=$l_datapoint;")
+			sql_string="$l_datapoint,'$g_object',$l_lon_current,$l_lat_current,$l_elevation,'$l_gpstime',0"
+			log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into path14 values $sql_string"
+			eval "sqlite3 $i_db \"insert or replace into path14 values($sql_string);\""
 		fi
 		l_lon_before=$l_lon_current
 		l_lat_before=$l_lat_current
@@ -1643,7 +945,6 @@ if [[ $? -eq 0 ]]; then
         wget $g_subdomain --tries=1 --timeout=10 --delete-after 2> speedtest.out
         speed=$(grep saved speedtest.out |cut -d' ' -f3|cut -d'(' -f2)
         speedunit="$(grep saved speedtest.out |cut -d' ' -f4|cut -d')' -f1)"
-      	log_info "$FUNCNAME $LINENO $speed $speedunit"
 		case "$speedunit" in
 			"B/s" )
 				internet=offline
@@ -1694,7 +995,7 @@ export LANG=en_EN.UTF8
 
 # transfer files if internet is online
 if f_check_internet; then
-	rsync -avzq data/* tober-kerken@h2144881.stratoserver.net:/var/www/vhosts/tober-kerken.de/$g_subdomain/php/data
+	rsync -avzq data/* tober-kerken@h2144881.stratoserver.net:/var/www/vhosts/tober-kerken.de/$g_subdomain/data
 fi
 log_debug "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
