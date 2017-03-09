@@ -96,17 +96,34 @@ local l_own_name=$(readlink -f ${BASH_SOURCE[0]})
 local l_own_path=$(dirname $l_own_name)
 local l_logfile=$l_own_path/logfile.log
 
+echo "$FUNCNAME $LINENO Get time from GPS after reboot"|tee -a $l_logfile
+
+i=0
+l_bt_active=false
+while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
+	i=$(( $i + 1 ))
+	l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
+	if [[ "$l_bt_status" = "active" ]]; then
+		echo "$FUNCNAME $LINENO iteration $i bluetooth active"|tee -a $l_logfile
+		l_bt_active=true
+	else
+		echo "$FUNCNAME $LINENO iteration $i waiting for bluetooth"|tee -a $l_logfile
+		sleep 5
+	fi
+done
+
+
 local l_valid_data=false
 local i=0
 while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
 	l_valid_data=true
 	i=$(( $i + 1 ))
-	local l_gpsdata=$(gpspipe -w -n 10| grep -m 1 TPV)
+	local l_gpsdata=$(gpspipe -w -n 10| grep -m 1 time)
 	local l_gpstimestring=$(echo "$l_gpsdata" | jq '.time'| sed -e 's/^"//' -e 's/"$//')
 	l_result=$(date -d $l_gpstimestring +%s >/dev/null 2>&1)
 	l_rc=$?
 	if [[ "$l_rc" != "0" ]]; then
-		echo "$FUNCNAME $LINENO loop $i string $l_gpstimestring is invalid for date command"|tee -a $l_logfile
+		echo "$FUNCNAME $LINENO loop $i string $l_gpstimestring invalid - no GPS fix yet"|tee -a $l_logfile
 		l_valid_data=false
 	fi
 done
@@ -118,12 +135,12 @@ if [[ "$l_valid_data" = "true" ]]; then
 
 	if (( $l_diff > 50 )); then
 		sudo date -s @$l_gpstime
-		echo "Time Difference detected - use GPS time $l_gpstimestring - systime was $(date -d @$l_systime) - is now $(date)"|tee -a $l_logfile
+		echo "$FUNCNAME $LINENO Time Difference detected - use GPS time $l_gpstimestring - systime was $(date -d @$l_systime) - is now $(date)"|tee -a $l_logfile
 	else
-		echo "No Time Difference detected - GPS $l_gpstimestring - sysdate $(date)"|tee -a $l_logfile
+		echo "$FUNCNAME $LINENO No Time Difference detected - GPS $l_gpstimestring - sysdate $(date)"|tee -a $l_logfile
 	fi
 else
-	echo "GPS timestring data $l_gpstimestring invalid - bad reception?"|tee -a $l_logfile
+	echo "$FUNCNAME $LINENO GPS timestring data $l_gpstimestring invalid - bad reception?"|tee -a $l_logfile
 	return 128
 fi
 }
@@ -417,6 +434,21 @@ else
 	log_debug "$FUNCNAME $LINENO using DB table $i_table"
 fi
 
+i=0
+l_bt_active=false
+while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
+	i=$(( $i + 1 ))
+	l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
+	if [[ "$l_bt_status" = "active" ]]; then
+		log_info "$FUNCNAME $LINENO Bluetooth active"
+		l_bt_active=true
+	else
+		log_error "$FUNCNAME $LINENO iteration $i Bluetooth not active, waiting 5 sec"
+		sleep 5
+	fi
+done
+
+
 local l_valid_data=false
 local i=0
 while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
@@ -428,7 +460,7 @@ while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
 	if [[ $(echo "$l_lat_new >= -85 && $l_lat_new <= 85"|bc) == 1 ]]; then
 		log_info "$FUNCNAME $LINENO loop $i l_lat_new $l_lat_new is valid"
 	else
-		log_error "$FUNCNAME $LINENO l_lat_new $l_lat_new is invalid"
+		log_error "$FUNCNAME $LINENO l_lat_new \"$l_lat_new\" is invalid"
 		l_valid_data=false
 	fi
 
@@ -436,15 +468,15 @@ while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
 	if [[ $(echo "$l_lon_new >= -180 && $l_lon_new <= 180"|bc) == 1 ]]; then
 		log_info "$FUNCNAME $LINENO loop $i l_lon_new $l_lon_new is valid"
 	else
-		log_error "$FUNCNAME $LINENO l_lon_new $l_lon_new is invalid"
+		log_error "$FUNCNAME $LINENO loop $i l_lon_new \"$l_lon_new\" is invalid"
 		l_valid_data=false
 	fi
 	
 	local l_elevation_new=$(echo "$gpsdata"|jq '.alt')
-	log_debug "$FUNCNAME $LINENO value $l_elevation \"$l_elevation\" "
+	log_debug "$FUNCNAME $LINENO loop $i value l_elevation \"$l_elevation\" "
 
 	local l_gpstime_new=$(echo "$gpsdata"|jq '.time')
-	log_debug "$FUNCNAME $LINENO $l_lat_new $l_lon_new $l_elevation $l_gpstime_new"
+	log_debug "$FUNCNAME $LINENO loop $i $l_lat_new $l_lon_new $l_elevation $l_gpstime_new"
 	local l_last_entry=$(sqlite3 $i_db "select max(unixtime) from $i_table;")
 	local l_lat=$(f_get_single_value $i_db $i_table latitude_n $l_last_entry)
 	local l_lon=$(f_get_single_value $i_db $i_table longitude_e $l_last_entry)
@@ -459,12 +491,12 @@ log_debug "$FUNCNAME $LINENO raw data $gpsdata"
 # otherwise not
 if [ $(echo "$l_distance > 0.1" |bc) -eq 1 ]; then
 	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new'"
-	log_info "$FUNCNAME $LINENO sqlite3 $i_db insert or replace into $i_table values $sql_string"
+	log_always "$FUNCNAME $LINENO sqlite3 $i_db insert or replace into $i_table values $sql_string"
 	eval "sqlite3 $i_db \"insert or replace into $i_table values($sql_string);\""
-	f_create_path_js $i_db $i_table $g_path_js
+	# f_create_path_js $i_db $i_table $g_path_js
 	f_do_transfer
 else
-	log_info "$FUNCNAME $LINENO nothing recorded - distance $l_distance <= 0.1 km"
+	log_always "$FUNCNAME $LINENO pos $l_lat_new $l_lon_new - distance $l_distance <= 0.1 km"
 fi
 
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"

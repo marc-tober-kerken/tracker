@@ -1,23 +1,27 @@
 #! /bin/bash
 
 main(){
-	# f_check_time
+	# want to make sure, that first start of this procedure does not take place within first 90sec after system start
+	# this way, GPS fix can be found & time can be adjusted
+	l_sysstart=$(cat /proc/uptime|cut -d' ' -f1)
+	if [[ $(echo "$l_sysstart < 90"|bc) == 1 ]]; then
+		echo "$FUNCNAME $LINENO system boot $l_sysstart sec ago, less than 90 sec - waiting"|tee -a $_base/logfile.log
+		return
+	fi
+	
 	local l_starttime=$(date +%s)
-	# init_vars
-	# should be replaced by f_init_from_ini
 	f_init_from_ini
 	log_info "$_scriptlocal $LINENO +++++++++++++++++++++++++++ Start of processing"
 	if [ -e $_base/lock ]; then
 		log_warning "$_scriptlocal $LINENO Lock from other script found"
 		lock_age=$(( $(date +%s) - $(cat lock) ))
 		log_warning "$_scriptlocal $LINENO lock age $lock_age secs"
-		if (( $lock_age >= 1200 ))
+		if (( $lock_age >= 120 ))
 		then
 			rm $_base/lock
 			log_error "$_scriptlocal $LINENO lock age is greater than 20min, rebooting"
 			log_error "+++++++++++++++++++++++++++ $_scriptlocal $LINENO end of processing - reboot" 
-			sudo shutdown -r -t sec 1 &
-			exit 1
+			sudo shutdown -r now &
 		else
 			log_warning "$_scriptlocal $LINENO waiting if situation resolves itself"
 		fi

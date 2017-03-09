@@ -5,36 +5,26 @@
 # @reboot cd /tracker/dev && ./clean_boot.sh
 
 main(){
+	# this is 2037, so that the standard collect.sh will not be able to start until
+	# this clean_boot.sh script is finished
+	# "master lock" only during boot
+	# echo 2114377200 >$_base/lock
 	f_check_time
 	l_rc=$?
 	if [[ "$l_rc" = "128" ]]; then
 		echo "no GPS - rebooting in 30 sec, forcing diskcheck"|tee -a $_base/logfile.log
+		rm $_base/lock
 		sudo touch /forcefsck
-		sleep 30
-		sudo shutdown -r -t sec 3 &
-		exit 1
+		sleep 1
+		sudo shutdown -r now &
 	fi 
 	local l_starttime=$(date +%s)
 	f_init_from_ini
 	log_always "$_scriptlocal $LINENO ++++BOOT++++++++++++++++++ Cleanup after boot"
-	if [ -e $_base/lock ]; then
-		log_always "$_scriptlocal $LINENO Lock from other script found"
-		lock_age=$(( $(date +%s) - $(cat lock) ))
-		log_always "$_scriptlocal $LINENO lock age $lock_age secs"
-		if (( $lock_age >= 15 ))
-		then
-			log_always "$_scriptlocal $LINENO $_base/lock found - interrupted by shutdown or power failure"
-			rm $_base/lock
-			sudo touch /forcefsck
-			sudo shutdown -r -t sec 3 &
-			return 1
-		else
-			log_always "$_scriptlocal $LINENO $_base/lock found - currently running after clean start"
-		fi
-	else
-		log_always "$_scriptlocal $LINENO no $_base/lock found - assuming consistent tracker"
-	fi
-
+	log_always "$_scriptlocal $LINENO ++++BOOT++++++++++++++++++ Start DB integrity check"
+	local l_db_consistent=$(sqlite3 $i_db "pragma integrity_check;")
+	log_always "$_scriptlocal $LINENO ++++BOOT++++++++++++++++++ DB integrity check done"
+	rm $_base/lock
 	log_always "$_scriptlocal $LINENO ++++BOOT++++++++++++++++++ runtime script $(( $(date +%s) - $l_starttime )) secs - End of processing"
 }
 
