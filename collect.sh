@@ -27,20 +27,18 @@ main(){
 		fi
 	else
 		echo $(date +%s) >lock
-		# l_timestamp=$(f_get_timestamp_rounded_5)
+		l_timestamp=$(cat lock)
 		f_create_DB $g_database
 		# implement later on
-		# f_do_housekeeping $g_database $g_table $l_timestamp
+		f_do_housekeeping $g_database $g_table $l_timestamp
 		
 		# only for testing - otherwise called by housekeeping
 		# echo date $(date +%u)
 		# f_do_backup /testtemp tober-kerken D$(date +%u)
 		# exit
 		
-		# use "1" for random numbers - if no sensors available
-		# f_get_sensordata $g_database $l_timestamp 1
 		f_get_position $g_database $g_table
-		# f_create_path $g_database
+		# f_create_path_js $g_database $g_table
 		# f_create_path_js $g_database path14 $g_path_js
 		# exit
 		# f_do_jsondata_month $g_database $g_table TempA TempWW RoomTemp1 TempKist
