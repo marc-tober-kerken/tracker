@@ -704,15 +704,21 @@ while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
 
 	local l_gpstime_new=$(echo "$gpsdata"|jq '.time')
 	log_debug "$FUNCNAME $LINENO loop $i $l_lat_new $l_lon_new $l_elevation $l_gpstime_new"
+done
+
+l_datapoints_count=$(sqlite3 $i_db "select count(*) from $i_table;")
+if [[ "$l_datapoints_count" != "0" ]]; then
 	local l_last_entry=$(sqlite3 $i_db "select max(unixtime) from $i_table;")
 	local l_lat=$(f_get_single_value $i_db $i_table latitude_n $l_last_entry)
 	local l_lon=$(f_get_single_value $i_db $i_table longitude_e $l_last_entry)
-done
+	log_debug "$FUNCNAME $LINENO $l_last_entry $l_lat $l_lon"
+	local l_distance=$(f_distance $l_lat $l_lon $l_lat_new $l_lon_new)
+	log_info "$FUNCNAME $LINENO position $l_lat_new $l_lon_new at l_elevation_new $l_elevation_new with time $l_gpstime_new distance $l_distance"
+	log_debug "$FUNCNAME $LINENO raw data $gpsdata"
+else
+	l_distance=0
+fi
 
-log_debug "$FUNCNAME $LINENO $l_last_entry $l_lat $l_lon"
-local l_distance=$(f_distance $l_lat $l_lon $l_lat_new $l_lon_new)
-log_info "$FUNCNAME $LINENO position $l_lat_new $l_lon_new at l_elevation_new $l_elevation_new with time $l_gpstime_new distance $l_distance"
-log_debug "$FUNCNAME $LINENO raw data $gpsdata"
 
 # if moved more than 100m, write values into DB 
 # also long & lat have to be valid values
