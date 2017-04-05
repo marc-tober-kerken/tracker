@@ -16,10 +16,10 @@ main(){
 		log_warning "$_scriptlocal $LINENO Lock from other script found"
 		lock_age=$(( $(date +%s) - $(cat lock) ))
 		log_warning "$_scriptlocal $LINENO lock age $lock_age secs"
-		if (( $lock_age >= 120 ))
+		if (( $lock_age >= 180 ))
 		then
 			rm $_base/lock
-			log_error "$_scriptlocal $LINENO lock age is greater than 20min, rebooting"
+			log_error "$_scriptlocal $LINENO lock age is greater than 3min, rebooting"
 			log_error "+++++++++++++++++++++++++++ $_scriptlocal $LINENO end of processing - reboot" 
 			sudo shutdown -r now &
 		else

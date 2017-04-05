@@ -101,19 +101,19 @@ local l_logfile=$l_own_path/logfile.log
 
 echo "$FUNCNAME $LINENO Get time from GPS after reboot"|tee -a $l_logfile
 
-i=0
-l_bt_active=false
-while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
-	i=$(( $i + 1 ))
-	l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
-	if [[ "$l_bt_status" = "active" ]]; then
-		echo "$FUNCNAME $LINENO iteration $i bluetooth active"|tee -a $l_logfile
-		l_bt_active=true
-	else
-		echo "$FUNCNAME $LINENO iteration $i waiting for bluetooth"|tee -a $l_logfile
-		sleep 5
-	fi
-done
+# i=0
+# l_bt_active=false
+# while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
+	# i=$(( $i + 1 ))
+	# l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
+	# if [[ "$l_bt_status" = "active" ]]; then
+		# echo "$FUNCNAME $LINENO iteration $i bluetooth active"|tee -a $l_logfile
+		# l_bt_active=true
+	# else
+		# echo "$FUNCNAME $LINENO iteration $i waiting for bluetooth"|tee -a $l_logfile
+		# sleep 5
+	# fi
+# done
 
 
 local l_valid_data=false
@@ -348,7 +348,6 @@ local i_return=$(sqlite3 $i_db "select $i_field from $i_table where unixtime=$i_
 echo $i_return
 }
 
-# f_create_path_js(){
 f_create_markers_json(){
 log_info "$FUNCNAME $LINENO start $1 $2 $3"
 local -r -i l_runtime=$SECONDS
@@ -429,7 +428,7 @@ f_create_path_json_EOF
 
 l_datapoints=$(sqlite3 $i_db "select unixtime from $i_table order by unixtime;")
 
-l_filename_snap="$i_filename""-snap"
+# l_filename_snap="$i_filename""-snap"
 
 for l_datapoint in $l_datapoints
 do 
@@ -453,7 +452,7 @@ cat >> $i_filename <<f_create_path_json2_EOF
 },
 f_create_path_json2_EOF
 
-printf "$l_lat,$l_lon|" >>$l_filename_snap
+# printf "$l_lat,$l_lon|" >>$l_filename_snap
 
 done
 
@@ -464,6 +463,123 @@ cat >> $i_filename <<f_create_path_json4_EOF
 }
 ]
 f_create_path_json4_EOF
+
+log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
+}
+
+f_snap2road(){
+log_info "$FUNCNAME $LINENO start $1 $2 $3"
+local -r i_url="$1"
+local -r i_idx_tmp="$2"
+
+# l_response=$(curl "https://roads.googleapis.com/v1/snapToRoads?path=-35.27801,149.12958|-35.28032,149.12907|-35.28099,149.12929|-35.28144,149.12984|-35.28194,149.13003|-35.28282,149.12956|-35.28302,149.12881|-35.28473,149.12836&interpolate=true&key=AIzaSyDsRlbhcPoQLhpSuYios3ircMSoeZP0f5Y")
+
+l_response=$(cat maps_response.txt)
+
+# You need printf '%s\n' "$var" here because if you use printf '%s' "$var" 
+# on a variable that doesn't end with a newline then the while loop will
+# completely miss the last line of the variable.
+
+l_lat_found_idx=0
+l_pair_found_idx=0
+l_idx=-1
+i=0
+printf '%s\n' "$l_response" | while IFS= read -r line
+do
+	i=$(( $i + 1 ))
+	l_line=$(echo $line| sed -e 's/^[ \t]*//')
+	case $l_line in 
+		\"latitude\"*)
+			l_lat_found_idx=$i
+			l_lat=$(echo $l_line|cut -d' ' -f2|sed 's/,//')
+		;;
+		\"longitude\"*)
+			if (( $(( $i - $l_lat_found_idx )) == 1 )); then
+				l_lon=$(echo $l_line|cut -d' ' -f2|sed 's/,//')
+				l_pair_found_idx=$i
+				log_debug "$FUNCNAME $LINENO $l_lat found also $l_lon at line $i"
+			else
+				log_error "$FUNCNAME $LINENO Longitude value without Latitude found"
+			fi
+			l_lat_found_idx=0
+		;;
+		\"originalIndex\"*)
+			if (( $(( $i - $l_pair_found_idx )) == 2 )); then
+				l_idx=$(echo $l_line|cut -d' ' -f2|sed 's/,//')
+				log_debug "$FUNCNAME $LINENO $l_lat $l_lon found google index $l_idx at line $i" 
+			else
+				log_error "$FUNCNAME $LINENO Index value without Lon/Lat pair found at line $i"
+			fi
+		;;
+		\"placeId\"*)
+			if (( $(( $i - $l_pair_found_idx )) < 4 )); then
+				l_placeId=$(echo $l_line|cut -d' ' -f2|sed 's/\"//g')
+				log_info "$FUNCNAME $LINENO corresponding PlaceID found $l_placeId at line $i"
+				log_info "$FUNCNAME $LINENO record complete $l_lat $l_lon $l_idx $l_placeId"
+				if [[ "$l_idx" != "-1" ]]; then
+					l_time=$(sqlite3 $g_database "select unixtime from google_idx_tmp where google_idx=$l_idx;")
+					log_info "$FUNCNAME $LINENO found unixtime $l_time for index $l_idx"
+					sql_string="snap_lon=$l_lon, snap_lat=$l_lat, placeId=$l_placeId"
+					eval "sqlite3 $i_db \"update google_idx_tmp	set $sql_string where unixtime=$l_time;\""
+					l_idx=-1
+				fi
+			else
+				log_error "$FUNCNAME $LINENO placeId value without Lon/Lat pair found at line $i"
+			fi
+		;;
+	esac
+	echo "$i: $l_line"
+done
+
+log_info "$FUNCNAME $LINENO end"
+}
+
+f_snap2road_json(){
+log_info "$FUNCNAME $LINENO start $1 $2 $3"
+local -r -i l_runtime=$SECONDS
+# function to use GPS positions and then retrieve 
+# new coordinates from google using snap to road
+# these new coordinates will be written in new table
+
+# input parameter 1: sqlite3 database with full path
+# input parameter 2: tablename
+# input parameter 3: filename with markers for google maps
+
+local -r i_db="$1"
+local -r i_table="$2"
+local -r i_filename="$3"
+
+l_url="https://roads.googleapis.com/v1/snapToRoads?path="
+
+l_datapoints=$(sqlite3 $i_db "select unixtime from $i_table where snap_flag=0 order by unixtime;")
+
+i_last_datapoint=0
+i=0
+for l_datapoint in $l_datapoints
+do 
+	if [[ $i != 0 ]]; then
+		l_url_coord="$l_url_coord""|"
+	fi
+	l_lat=$(f_get_single_value $i_db $i_table latitude_n $l_datapoint|awk '{printf "%3.5f", $0}')
+	l_lon=$(f_get_single_value $i_db $i_table longitude_e $l_datapoint|awk '{printf "%3.5f", $0}')
+	l_url_coord="$l_url_coord""$l_lat"",""$l_lon"
+	sql_string="$l_datapoint,'$g_object',$i,NULL,NULL,NULL"
+	eval "sqlite3 $i_db \"insert or replace into google_idx_tmp	values($sql_string);\""
+	if [[ "$i" = "99" ]]; then
+		f_snap2road $l_url_coord google_idx_tmp
+		i=0
+		# need to save last point of package - as starting point for next package
+		i_last_datapoint=$l_datapoint
+		log_info "$FUNCNAME $LINENO first 100 processed, last dp is $l_datapoint"
+		exit
+	fi
+	i=$(( $i + 1 ))
+done
+# if [[ "$i_last_datapoint" != "0" ]]; then
+
+
+log_info "$FUNCNAME $LINENO snap2roads string is $l_url_coord"
+f_snap2road $l_url_coord
 
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
@@ -484,11 +600,13 @@ fi
 
 if [[ ! -e "$i_db" ]]; then
 	# object - text description for object to be tracked
-    sqlite3 $i_db "CREATE TABLE IF NOT EXISTS position (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT, distance REAL);"
+    sqlite3 $i_db "CREATE TABLE IF NOT EXISTS position (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT, distance REAL, snap_flag INT);"
+	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS google_idx_tmp (unixtime INTEGER PRIMARY KEY, object TEXT, google_idx INT, snap_long REAL, snap_lat REAL, placeId TEXT);"
 	log_info "$FUNCNAME $LINENO DB $i_db initialized and table \"position\" created"
 else
 	log_info "$FUNCNAME $LINENO DB $i_db already exists"
-	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS position (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT, distance REAL);"
+	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS position (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT, distance REAL,snap_flag INT);"
+	sqlite3 $i_db "CREATE TABLE IF NOT EXISTS google_idx_tmp (unixtime INTEGER PRIMARY KEY, object TEXT, google_idx INT, snap_long REAL, snap_lat REAL, placeId TEXT);"
 fi
 
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
@@ -527,19 +645,19 @@ fi
 
 
 # check if bluetooth is active - connection to GPS
-i=0
-l_bt_active=false
-while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
-	i=$(( $i + 1 ))
-	l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
-	if [[ "$l_bt_status" = "active" ]]; then
-		log_info "$FUNCNAME $LINENO Bluetooth active"
-		l_bt_active=true
-	else
-		log_error "$FUNCNAME $LINENO iteration $i Bluetooth not active, waiting 5 sec"
-		sleep 5
-	fi
-done
+# i=0
+# l_bt_active=false
+# while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
+	# i=$(( $i + 1 ))
+	# l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
+	# if [[ "$l_bt_status" = "active" ]]; then
+		# log_info "$FUNCNAME $LINENO Bluetooth active"
+		# l_bt_active=true
+	# else
+		# log_error "$FUNCNAME $LINENO iteration $i Bluetooth not active, waiting 5 sec"
+		# sleep 5
+	# fi
+# done
 
 # get GPS data and try 5 times to get valid position
 local l_valid_data=false
@@ -600,29 +718,30 @@ log_debug "$FUNCNAME $LINENO raw data $gpsdata"
 # also long & lat have to be valid values
 # otherwise not
 if [[ $(echo "$l_distance > 0.1"|bc) -eq 1 && "$l_valid_data" = "true" ]]; then
-	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new','$l_distance'"
+	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new','$l_distance',0"
 	log_always "$FUNCNAME $LINENO distance $l_distance sqlite3 $i_db insert or replace into $i_table values $sql_string"
 	eval "sqlite3 $i_db \"insert or replace into $i_table values($sql_string);\""
-	# f_create_path_js $i_db $i_table $g_path_json
 	f_create_path_json $i_db $i_table $g_path_json
-	f_create_markers_json  $i_db $i_table $g_markers_json
+	# f_create_markers_json  $i_db $i_table $g_markers_json
+	# f_snap2road_json $i_db $i_table 
 	f_do_transfer
 else
 	log_always "$FUNCNAME $LINENO pos $l_lat_new $l_lon_new - distance $l_distance <= 0.1 km - data validity is $l_valid_data"
 	f_create_path_json $i_db $i_table $g_path_json
-	f_create_markers_json  $i_db $i_table $g_markers_json
+	# f_create_markers_json  $i_db $i_table $g_markers_json
+	# f_snap2road_json $i_db $i_table 
 	f_do_transfer
 fi
 
 # initialize table with first position - if empty
 l_datapoints_count=$(sqlite3 $i_db "select count(*) from $i_table;")
 if [[ $l_datapoints_count = 0 && "$l_valid_data" = "true" ]]; then
-	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new','$l_distance'"
+	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new','$l_distance',0"
 	log_always "$FUNCNAME $LINENO init pos $l_lat_new $l_lon_new sqlite3 $i_db insert or replace into $i_table values $sql_string"
 	eval "sqlite3 $i_db \"insert or replace into $i_table values($sql_string);\""
-	# f_create_path_js $i_db $i_table $g_path_json
 	f_create_path_json $i_db $i_table $g_path_json
-	f_create_markers_json  $i_db $i_table $g_markers_json
+	# f_create_markers_json  $i_db $i_table $g_markers_json
+	# f_snap2road_json $i_db $i_table 
 	f_do_transfer
 fi
 
@@ -669,61 +788,6 @@ log_debug_silent "$FUNCNAME $LINENO distance3 $l_distance"
 echo $l_distance
 
 log_info_silent "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
-}
-
-function f_create_path(){
-log_info_silent "$FUNCNAME $LINENO start $1 $2 $3 $4"
-local -r -i l_runtime=$SECONDS
-local -r i_db="$1"
-# Kerken Lat/Lon 51.433314N, 6.402108E
-# Geldern 51.513044N, 6.326899E
-# distance according to google maps: 10.28 [km]
-# f_distance 51.433314 6.402108 51.513044 6.326899 returns 10.27571162277727324957
-f_distance 51.433314 6.402108 51.513044 6.326899
-
-# sqlite3 $i_db "CREATE TABLE IF NOT EXISTS $i_table (unixtime INTEGER PRIMARY KEY, object TEXT, longitude_e REAL, latitude_n REAL, elevation REAL, gpstime TEXT);"
-
-l_now=$(f_get_timestamp_rounded_5)
-l_datapoints_count=$(sqlite3 $i_db "select count(1) from $g_table where unixtime>=($l_now - 86400);")
-
-if [[ $l_datapoints_count > 1 ]]; then
-	l_datapoints=$(sqlite3 $i_db "select unixtime from $g_table where unixtime>=($l_now - 86400) order by unixtime;")
-	
-	i=0
-	for l_datapoint in $l_datapoints
-	do 
-		i=$(( $i + 1 ))
-		l_lat_current=$(f_get_single_value $i_db $g_table latitude_n $l_datapoint)
-		l_lon_current=$(f_get_single_value $i_db $g_table longitude_e $l_datapoint)
-		if [[ $i > 1 ]]; then
-			l_distance=$(f_distance $l_lat_before $l_lon_before $l_lat_current $l_lon_current)
-			log_debug "$FUNCNAME $LINENO distance to last point is $l_distance"
-			if [ $(echo "$l_distance > 0.05" |bc) -eq 1 ]; then
-				log_info "$FUNCNAME $LINENO distance $l_distance greater than 50m"
-				l_elevation=$(sqlite3 $i_db "select elevation from $g_table where unixtime=$l_datapoint;")
-				if [[ "$l_elevation" = "" ]]; then
-					l_elevation=NULL
-				fi
-				l_gpstime=$(sqlite3 $i_db "select gpstime from $g_table where unixtime=$l_datapoint;")
-				sql_string="$l_datapoint,'$g_object',$l_lon_current,$l_lat_current,$l_elevation,'$l_gpstime',$l_distance"
-				log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into path14 values $sql_string"
-				eval "sqlite3 $i_db \"insert or replace into path14 values($sql_string);\""
-			fi
-		else
-			l_elevation=$(sqlite3 $i_db "select elevation from $g_table where unixtime=$l_datapoint;")
-			if [[ "$l_elevation" = "" ]]; then
-				l_elevation=NULL
-			fi
-			l_gpstime=$(sqlite3 $i_db "select gpstime from $g_table where unixtime=$l_datapoint;")
-			sql_string="$l_datapoint,'$g_object',$l_lon_current,$l_lat_current,$l_elevation,'$l_gpstime',0"
-			log_info "$FUNCNAME $LINENO sqlite3 $i_db insert into path14 values $sql_string"
-			eval "sqlite3 $i_db \"insert or replace into path14 values($sql_string);\""
-		fi
-		l_lon_before=$l_lon_current
-		l_lat_before=$l_lat_current
-	done
-fi
-log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
 
 function f_check_internet()
