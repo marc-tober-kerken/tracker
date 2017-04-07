@@ -99,6 +99,8 @@ local l_own_name=$(readlink -f ${BASH_SOURCE[0]})
 local l_own_path=$(dirname $l_own_name)
 local l_logfile=$l_own_path/logfile.log
 
+local l_starttime=$(date +%s)
+
 echo "$FUNCNAME $LINENO Get time from GPS after reboot"|tee -a $l_logfile
 
 # i=0
@@ -115,10 +117,28 @@ echo "$FUNCNAME $LINENO Get time from GPS after reboot"|tee -a $l_logfile
 	# fi
 # done
 
+i=0
+l_gps_connected=false
+while [[ "$l_gps_connected" = "false" && $i < 5 ]]; do
+	i=$(( $i + 1 ))
+	if lsusb|grep "1546:01a6 U-Blox AG"; then
+		log_info "$FUNCNAME $LINENO USB GPS device 1546:01a6 U-Blox AG connected"
+		l_gps_connected=true
+	else
+		log_warning "$FUNCNAME $LINENO USB GPS device 1546:01a6 U-Blox AG NOT connected"
+		sleep 5
+	fi
+done
+
+if [[ "$l_gps_connected" = "false" ]]; then
+	log_error "$FUNCNAME $LINENO USB GPS device 1546:01a6 U-Blox AG not found"
+	log_always "$FUNCNAME $LINENO ++++BOOT++++++++++++++++++ runtime script $(( $(date +%s) - $l_starttime )) secs - End of processing"
+	return 128
+fi
 
 local l_valid_data=false
 local i=0
-while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
+while [[ "$l_valid_data" = "false" && $i < 60 ]]; do
 	l_valid_data=true
 	i=$(( $i + 1 ))
 	local l_gpsdata=$(gpspipe -w -n 10| grep -m 1 time)
@@ -126,7 +146,8 @@ while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
 	l_result=$(date -d $l_gpstimestring +%s >/dev/null 2>&1)
 	l_rc=$?
 	if [[ "$l_rc" != "0" ]]; then
-		echo "$FUNCNAME $LINENO loop $i string $l_gpstimestring invalid - no GPS fix yet"|tee -a $l_logfile
+		log_warning "$FUNCNAME $LINENO loop $i string $l_gpstimestring invalid - no GPS fix yet"
+		sleep 15
 		l_valid_data=false
 	fi
 done
@@ -138,14 +159,17 @@ if [[ "$l_valid_data" = "true" ]]; then
 
 	if (( $l_diff > 50 )); then
 		sudo date -s @$l_gpstime
-		echo "$FUNCNAME $LINENO Time Difference detected - use GPS time $l_gpstimestring - systime was $(date -d @$l_systime) - is now $(date)"|tee -a $l_logfile
+		log_warning "$FUNCNAME $LINENO Time Difference detected - use GPS time $l_gpstimestring - systime was $(date -d @$l_systime) - is now $(date)"
 	else
-		echo "$FUNCNAME $LINENO No Time Difference detected - GPS $l_gpstimestring - sysdate $(date)"|tee -a $l_logfile
+		log_info "$FUNCNAME $LINENO No Time Difference detected - GPS $l_gpstimestring - sysdate $(date)"
 	fi
 else
-	echo "$FUNCNAME $LINENO GPS timestring data $l_gpstimestring invalid - bad reception?"|tee -a $l_logfile
+	log_error "$FUNCNAME $LINENO GPS timestring data $l_gpstimestring invalid - bad reception?"
+	log_always "$FUNCNAME $LINENO ++++BOOT++++++++++++++++++ runtime script $(( $(date +%s) - $l_starttime )) secs - End of processing"
 	return 128
 fi
+
+log_always "$FUNCNAME $LINENO ++++BOOT++++++++++++++++++ runtime script $(( $(date +%s) - $l_starttime )) secs - End of processing"
 }
 
 log_debug(){
