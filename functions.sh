@@ -735,10 +735,10 @@ else
 	return 128
 fi
 
-# get GPS data and try 5 times to get valid position
+# get GPS data and try a few times to get valid position
 local l_valid_data=false
 local i=0
-while [[ "$l_valid_data" = "false" && $i < 5 ]]; do
+while [[ "$l_valid_data" = "false" && $i < 6 ]]; do
 	l_valid_data=true
 	i=$(( $i + 1 ))
 	local gpsdata=$(gpspipe -w -n 10|grep -m 1 TPV)
@@ -939,6 +939,8 @@ export LANG=en_EN.UTF8
 # transfer files if internet is online
 if f_check_internet; then
 	rsync -avzq data/* tober-kerken@h2144881.stratoserver.net:/var/www/vhosts/tober-kerken.de/$g_subdomain/data
+	l_rc=$?
+	log_info "$FUNCNAME $LINENO rsynced data with return code $l_rc"
 fi
 log_debug "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
