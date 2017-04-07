@@ -101,21 +101,7 @@ local l_logfile=$l_own_path/logfile.log
 
 local l_starttime=$(date +%s)
 
-echo "$FUNCNAME $LINENO Get time from GPS after reboot"|tee -a $l_logfile
-
-# i=0
-# l_bt_active=false
-# while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
-	# i=$(( $i + 1 ))
-	# l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
-	# if [[ "$l_bt_status" = "active" ]]; then
-		# echo "$FUNCNAME $LINENO iteration $i bluetooth active"|tee -a $l_logfile
-		# l_bt_active=true
-	# else
-		# echo "$FUNCNAME $LINENO iteration $i waiting for bluetooth"|tee -a $l_logfile
-		# sleep 5
-	# fi
-# done
+log_info "$FUNCNAME $LINENO Get time from GPS after reboot"|tee -a $l_logfile
 
 i=0
 l_gps_connected=false
@@ -141,6 +127,7 @@ local i=0
 while [[ "$l_valid_data" = "false" && $i < 60 ]]; do
 	l_valid_data=true
 	i=$(( $i + 1 ))
+	log_always "$FUNCNAME $LINENO $i"
 	local l_gpsdata=$(gpspipe -w -n 10| grep -m 1 time)
 	local l_gpstimestring=$(echo "$l_gpsdata" | jq '.time'| sed -e 's/^"//' -e 's/"$//')
 	l_result=$(date -d $l_gpstimestring +%s >/dev/null 2>&1)

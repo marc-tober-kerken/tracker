@@ -9,6 +9,8 @@ main(){
 	# this clean_boot.sh script is finished
 	# "master lock" only during boot
 	# echo 2114377200 >$_base/lock
+	local l_starttime=$(date +%s)
+	f_init_from_ini
 	f_check_time
 	l_rc=$?
 	if [[ "$l_rc" = "128" ]]; then
@@ -18,8 +20,6 @@ main(){
 		sleep 1
 		sudo shutdown -r now &
 	fi 
-	local l_starttime=$(date +%s)
-	f_init_from_ini
 	log_always "$_scriptlocal $LINENO ++++BOOT++++++++++++++++++ Cleanup after boot"
 	log_always "$_scriptlocal $LINENO ++++BOOT++++++++++++++++++ Start DB integrity check for $g_database"
 	local l_db_consistent=$(sqlite3 $g_database "pragma integrity_check;")
