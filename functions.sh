@@ -810,8 +810,8 @@ if [[ $(echo "$l_distance > 0.1"|bc) -eq 1 && "$l_valid_data" = "true" ]]; then
 	f_do_transfer
 else
 	log_always "$FUNCNAME $LINENO pos $l_lat_new $l_lon_new - distance $l_distance <= 0.1 km - data validity is $l_valid_data"
-	f_create_path48_json $i_db $i_table $g_path_json
-	f_do_transfer
+	# f_create_path48_json $i_db $i_table $g_path_json
+	# f_do_transfer
 	# f_create_path_json $i_db $i_table $g_path_json
 	# f_create_markers_json  $i_db $i_table $g_markers_json
 	# f_snap2road_json $i_db $i_table 
