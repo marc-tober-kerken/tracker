@@ -478,6 +478,77 @@ f_create_path_json4_EOF
 log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
 }
 
+f_create_path48_json(){
+log_info "$FUNCNAME $LINENO start $1 $2 $3"
+local -r -i l_runtime=$SECONDS
+# function to create file with positions
+# for markers in google maps
+# input parameter 1: sqlite3 database with full path
+# input parameter 2: tablename
+# input parameter 3: filename with markers for google maps
+
+local -r i_db="$1"
+local -r i_table="$2"
+local -r i_filename="$3"
+
+cat > $i_filename <<f_create_path48_json_EOF
+[
+f_create_path48_json_EOF
+
+
+l_most_recent=$(sqlite3 $i_db "select max(unixtime) from $i_table;")
+l_48h=$(( $l_most_recent - 172800 ))
+l_recorded_points=$(sqlite3 $i_db "select count(1) from $i_table where unixtime between $l_48h and $l_most_recent;")
+
+log_info "$FUNCNAME $LINENO found $l_recorded_points points during past 48h"
+
+# get past 48h (any number of values) or minimum of 100 values
+l_min_values=100
+if (( $l_recorded_points < $l_min_values )); then
+	l_datapoints=$(sqlite3 $i_db "select unixtime from (select unixtime from position order by unixtime desc limit $l_min_values) order by unixtime;")
+else
+	l_datapoints=$(sqlite3 $i_db "select unixtime from $i_table where unixtime between $l_48h and $l_most_recent;")
+fi
+
+i=0
+for l_datapoint in $l_datapoints
+do 
+	i=$(( $i + 1 ))
+	l_lat=$(f_get_single_value $i_db $i_table latitude_n $l_datapoint|awk '{printf "%2.6f", $0}')
+	l_lon=$(f_get_single_value $i_db $i_table longitude_e $l_datapoint|awk '{printf "%2.6f", $0}')
+	l_elevation=$(f_get_single_value $i_db $i_table elevation $l_datapoint)
+	log_debug "$FUNCNAME $LINENO processing $i $l_datapoint, got $l_lat $l_lon $l_elevation"
+	if [[ "$l_elevation" = "" ]]; then
+		l_coordinates="[$l_lon,$l_lat]"
+	else
+		l_coordinates="[$l_lon,$l_lat,$l_elevation]"
+	fi
+
+	l_date_human=$(date -d @$l_datapoint +"%d.%m.%Y %H:%M")
+
+cat >> $i_filename <<f_create_path48_json2_EOF
+{
+"title": "$l_date_human",
+"lat": $l_lat,
+"lng": $l_lon
+},
+f_create_path48_json2_EOF
+
+# printf "$l_lat,$l_lon|" >>$l_filename_snap
+
+done
+
+# remove last line "}," - has to be without ","
+sed -i '$ d' $i_filename
+
+cat >> $i_filename <<f_create_path48_json4_EOF
+}
+]
+f_create_path48_json4_EOF
+
+log_info "$FUNCNAME $LINENO stop after $(( $SECONDS - $l_runtime )) seconds"
+}
+
 f_snap2road(){
 log_info "$FUNCNAME $LINENO start $1 $2 $3"
 local -r i_url="$1"
@@ -732,12 +803,15 @@ if [[ $(echo "$l_distance > 0.1"|bc) -eq 1 && "$l_valid_data" = "true" ]]; then
 	sql_string="$l_unixtime,'$g_object',$l_lon_new,$l_lat_new,$l_elevation_new,'$l_gpstime_new','$l_distance',0"
 	log_always "$FUNCNAME $LINENO distance $l_distance sqlite3 $i_db insert or replace into $i_table values $sql_string"
 	eval "sqlite3 $i_db \"insert or replace into $i_table values($sql_string);\""
-	f_create_path_json $i_db $i_table $g_path_json
+	# f_create_path_json $i_db $i_table $g_path_json
+	f_create_path48_json $i_db $i_table $g_path_json
 	# f_create_markers_json  $i_db $i_table $g_markers_json
 	# f_snap2road_json $i_db $i_table 
 	f_do_transfer
 else
 	log_always "$FUNCNAME $LINENO pos $l_lat_new $l_lon_new - distance $l_distance <= 0.1 km - data validity is $l_valid_data"
+	f_create_path48_json $i_db $i_table $g_path_json
+	f_do_transfer
 	# f_create_path_json $i_db $i_table $g_path_json
 	# f_create_markers_json  $i_db $i_table $g_markers_json
 	# f_snap2road_json $i_db $i_table 
