@@ -38,6 +38,12 @@ main(){
 		# exit
 		
 		f_get_position $g_database $g_table
+		l_rc=$?
+		if [[ "$l_rc" = "128" ]]; then
+			log_error "$_scriptlocal $LINENO could not get GPS position"
+			log_error "+++++++++++++++++++++++++++ $_scriptlocal $LINENO end of processing - reboot" 
+			sudo shutdown -r now &
+		fi
 		# f_create_path_js $g_database $g_table
 		# f_create_path_js $g_database path14 $g_path_js
 		# exit

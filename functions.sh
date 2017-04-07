@@ -654,21 +654,15 @@ else
 	log_debug "$FUNCNAME $LINENO using DB table $i_table"
 fi
 
-
-# check if bluetooth is active - connection to GPS
-# i=0
-# l_bt_active=false
-# while [[ "$l_bt_active" = "false" && $i < 5 ]]; do
-	# i=$(( $i + 1 ))
-	# l_bt_status=$(sudo systemctl status bluetooth|grep "Active:"|awk '{print $2}')
-	# if [[ "$l_bt_status" = "active" ]]; then
-		# log_info "$FUNCNAME $LINENO Bluetooth active"
-		# l_bt_active=true
-	# else
-		# log_error "$FUNCNAME $LINENO iteration $i Bluetooth not active, waiting 5 sec"
-		# sleep 5
-	# fi
-# done
+i=0
+l_gps_connected=false
+if lsusb|grep "1546:01a6 U-Blox AG"; then
+	log_info "$FUNCNAME $LINENO USB GPS device 1546:01a6 U-Blox AG connected"
+	l_gps_connected=true
+else
+	log_error "$FUNCNAME $LINENO USB GPS device 1546:01a6 U-Blox AG NOT connected"
+	return 128
+fi
 
 # get GPS data and try 5 times to get valid position
 local l_valid_data=false
